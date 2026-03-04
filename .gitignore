@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.env.local
+
+# Database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+frontend/dist/
+
+# Electron
+frontend/release/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sessions (sensitive data)
+backend/sessions/
+*.session
+*.session-journal
+
+# Uploads / exports
+backend/static/exports/
+backend/static/uploads/
