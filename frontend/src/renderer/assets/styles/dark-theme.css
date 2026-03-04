@@ -1,0 +1,119 @@
+/* Override Element Plus variables for dark theme */
+:root {
+  --el-bg-color: #1E1E2E;
+  --el-bg-color-page: #181825;
+  --el-bg-color-overlay: #24273A;
+  --el-text-color-primary: #CDD6F4;
+  --el-text-color-regular: #BAC2DE;
+  --el-text-color-secondary: #A6ADC8;
+  --el-text-color-placeholder: #6C7086;
+  --el-border-color: #313244;
+  --el-border-color-light: #45475A;
+  --el-border-color-lighter: #313244;
+  --el-fill-color-blank: #1E1E2E;
+  --el-fill-color: #24273A;
+  --el-fill-color-light: #313244;
+  --el-fill-color-lighter: #45475A;
+  --el-color-primary: #409EFF;
+  --el-color-success: #67C23A;
+  --el-color-warning: #FAB387;
+  --el-color-danger: #F38BA8;
+  --el-color-info: #89DCEB;
+  --el-menu-bg-color: #181825;
+  --el-menu-text-color: #CDD6F4;
+  --el-menu-active-color: #409EFF;
+  --el-menu-hover-bg-color: #24273A;
+  --el-table-bg-color: #1E1E2E;
+  --el-table-tr-bg-color: #1E1E2E;
+  --el-table-header-bg-color: #181825;
+  --el-table-row-hover-bg-color: #24273A;
+  --el-table-border-color: #313244;
+  --el-card-bg-color: #24273A;
+}
+
+/* Dark scrollbar for whole page */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #45475A transparent;
+}
+
+/* Sidebar menu */
+.el-menu {
+  border-right: none !important;
+}
+
+.el-menu-item.is-active {
+  background-color: rgba(64, 158, 255, 0.15) !important;
+}
+
+/* Table */
+.el-table {
+  background-color: var(--el-table-bg-color) !important;
+}
+
+.el-table th.el-table__cell {
+  background-color: var(--el-table-header-bg-color) !important;
+  color: var(--el-text-color-secondary);
+  font-weight: 600;
+}
+
+/* Card */
+.el-card {
+  background-color: var(--el-card-bg-color);
+  border-color: var(--el-border-color);
+}
+
+.el-card__header {
+  border-bottom-color: var(--el-border-color);
+}
+
+/* Dialog */
+.el-dialog {
+  background-color: #24273A;
+  border: 1px solid #313244;
+}
+
+.el-dialog__header {
+  border-bottom: 1px solid #313244;
+}
+
+/* Form */
+.el-input__wrapper {
+  background-color: #181825 !important;
+  box-shadow: 0 0 0 1px #313244 inset !important;
+}
+
+.el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px #409EFF inset !important;
+}
+
+/* Select dropdown */
+.el-select-dropdown {
+  background-color: #24273A;
+  border-color: #313244;
+}
+
+.el-select-dropdown__item:hover {
+  background-color: #313244;
+}
+
+/* Dropdown */
+.el-dropdown-menu {
+  background-color: #24273A;
+  border-color: #313244;
+}
+
+.el-dropdown-menu__item:hover {
+  background-color: #313244;
+}
+
+/* Tag */
+.el-tag {
+  border-radius: 3px;
+}
+
+/* Pagination */
+.el-pagination {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
