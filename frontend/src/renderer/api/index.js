@@ -26,12 +26,11 @@ export const accountsApi = {
   update: (id, data) => http.put(`/api/accounts/${id}`, data),
   delete: (id) => http.delete(`/api/accounts/${id}`),
   bulkAction: (data) => http.post('/api/accounts/bulk-action', data),
+  bulkCheckSpam: (data) => http.post('/api/accounts/bulk/check-spam', data),
+  bulkSet2fa: (data) => http.post('/api/accounts/bulk/set-2fa', data),
+  bulkUpdateProfile: (data) => http.post('/api/accounts/bulk/update-profile', data),
   import: (formData) => http.post('/api/accounts/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   export: () => http.get('/api/accounts/export'),
-  getGroups: () => http.get('/api/accounts/groups/'),
-  createGroup: (data) => http.post('/api/accounts/groups/', data),
-  updateGroup: (id, data) => http.put(`/api/accounts/groups/${id}`, data),
-  deleteGroup: (id) => http.delete(`/api/accounts/groups/${id}`),
 }
 
 export const proxiesApi = {
