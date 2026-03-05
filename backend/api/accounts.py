@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import tempfile
 import zipfile
@@ -14,6 +15,8 @@ from sqlalchemy.orm import Session
 from database.connection import get_db
 from models.account import Account
 from utils.phone_parser import get_country_from_phone, parse_2fa_from_json
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/accounts", tags=["账号管理"])
 
@@ -404,7 +407,6 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         "UNKNOWN": "disconnected",
     }
 
-    _SPAMBOT_WAIT_SECS = 3   # Seconds to wait for @SpamBot reply
     _RAW_REPLY_DB_MAX = 500  # Max chars stored in DB
     _RAW_REPLY_API_MAX = 500  # Max chars returned in API response (same as DB)
 
@@ -435,11 +437,18 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             "error": "账号缺少 API ID / API Hash，请在账号或系统设置中配置",
         }
 
+    phone = account.phone
+
     try:
         from telethon import TelegramClient
-        from telethon.errors import FloodWaitError
+        from telethon.errors import (
+            AuthKeyUnregisteredError,
+            FloodWaitError,
+            PhoneNumberBannedError,
+        )
         from telethon.sessions import StringSession
 
+        logger.info(f"正在连接账号 {phone}...")
         client = TelegramClient(
             StringSession(account.session_string),
             api_id,
@@ -449,41 +458,70 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         )
         await client.connect()
 
+        if not client.is_connected():
+            logger.error(f"账号 {phone} 连接失败")
+            account.restriction_status = "UNKNOWN"
+            account.restriction_raw_reply = "无法连接到 Telegram"
+            account.restriction_checked_at = datetime.utcnow()
+            db.commit()
+            return {
+                "account_id": account_id,
+                "phone": phone,
+                "restriction_status": "UNKNOWN",
+                "raw_reply": "无法连接到 Telegram",
+                "checked_at": account.restriction_checked_at.isoformat(),
+                "error": "连接失败",
+            }
+
+        logger.info(f"账号 {phone} 已连接到 Telegram")
+
         if not await client.is_user_authorized():
             await client.disconnect()
+            logger.warning(f"账号 {phone} 未授权或 session 已失效")
             account.restriction_status = "UNKNOWN"
             account.restriction_raw_reply = "账号未授权或 session 已失效"
             account.restriction_checked_at = datetime.utcnow()
             db.commit()
             return {
                 "account_id": account_id,
-                "phone": account.phone,
+                "phone": phone,
                 "restriction_status": "UNKNOWN",
                 "raw_reply": "账号未授权或 session 已失效",
                 "checked_at": account.restriction_checked_at.isoformat(),
             }
 
+        logger.info(f"账号 {phone} 授权状态正常")
+
         try:
-            import asyncio
+            logger.info(f"正在联系 @SpamBot 检查账号 {phone}...")
+            async with client.conversation("SpamBot", timeout=30) as conv:
+                await conv.send_message("/start")
+                logger.info(f"已向 @SpamBot 发送 /start (账号 {phone})")
+                resp = await conv.get_response()
+                raw_reply = resp.text
 
-            await client.send_message("@SpamBot", "/start")
-            await asyncio.sleep(_SPAMBOT_WAIT_SECS)
-            messages = await client.get_messages("@SpamBot", limit=1)
+            logger.info(f"收到 @SpamBot 回复 (账号 {phone}): {raw_reply[:100]}...")
+
             await client.disconnect()
+            logger.info(f"账号 {phone} 已断开连接")
 
-            raw_reply = messages[0].text if messages else ""
             raw_reply_lower = raw_reply.lower()
 
             if any(k in raw_reply_lower for k in _UNRESTRICTED_KW):
                 restriction_status = "UNRESTRICTED"
+                logger.info(f"账号 {phone} 状态: 无限制")
             elif any(k in raw_reply_lower for k in _SPAM_KW):
                 restriction_status = "SPAM"
+                logger.warning(f"账号 {phone} 状态: 垃圾邮件限制")
             elif any(k in raw_reply_lower for k in _FROZEN_KW):
                 restriction_status = "FROZEN"
+                logger.warning(f"账号 {phone} 状态: 冻结")
             elif any(k in raw_reply_lower for k in _BANNED_KW):
                 restriction_status = "BANNED"
+                logger.error(f"账号 {phone} 状态: 封禁")
             else:
                 restriction_status = "UNKNOWN"
+                logger.warning(f"账号 {phone} 无法识别 SpamBot 回复，返回 UNKNOWN")
 
             account.restriction_status = restriction_status
             account.restriction_raw_reply = raw_reply[:_RAW_REPLY_DB_MAX]
@@ -493,15 +531,17 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             account.is_banned = restriction_status == "BANNED"
             db.commit()
 
+            logger.info(f"账号 {phone} 检查完成，状态: {restriction_status}")
             return {
                 "account_id": account_id,
-                "phone": account.phone,
+                "phone": phone,
                 "restriction_status": restriction_status,
                 "raw_reply": raw_reply[:_RAW_REPLY_API_MAX],
                 "checked_at": account.restriction_checked_at.isoformat(),
             }
 
         except FloodWaitError as e:
+            logger.warning(f"账号 {phone} 触发 Telegram 限流，需等待 {e.seconds} 秒")
             await client.disconnect()
             account.restriction_status = "UNKNOWN"
             account.restriction_raw_reply = f"Telegram 限流，需等待 {e.seconds} 秒"
@@ -509,25 +549,58 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             db.commit()
             return {
                 "account_id": account_id,
-                "phone": account.phone,
+                "phone": phone,
                 "restriction_status": "UNKNOWN",
                 "raw_reply": f"Telegram 限流，需等待 {e.seconds} 秒",
                 "checked_at": account.restriction_checked_at.isoformat(),
+                "error": f"flood_wait_{e.seconds}",
             }
 
         except Exception as e:
-            await client.disconnect()
-            raise e
+            logger.error(f"账号 {phone} 与 SpamBot 对话失败: {e}", exc_info=True)
+            if client.is_connected():
+                await client.disconnect()
+            raise
+
+    except PhoneNumberBannedError:
+        logger.error(f"账号 {phone} 手机号已被 Telegram 封禁")
+        account.restriction_status = "BANNED"
+        account.restriction_raw_reply = "手机号已被 Telegram 封禁"
+        account.restriction_checked_at = datetime.utcnow()
+        account.is_banned = True
+        db.commit()
+        return {
+            "account_id": account_id,
+            "phone": phone,
+            "restriction_status": "BANNED",
+            "raw_reply": "手机号已被 Telegram 封禁",
+            "checked_at": account.restriction_checked_at.isoformat(),
+        }
+
+    except AuthKeyUnregisteredError:
+        logger.error(f"账号 {phone} Session 已失效")
+        account.restriction_status = "UNKNOWN"
+        account.restriction_raw_reply = "Session 已失效，需重新登录"
+        account.restriction_checked_at = datetime.utcnow()
+        db.commit()
+        return {
+            "account_id": account_id,
+            "phone": phone,
+            "restriction_status": "UNKNOWN",
+            "raw_reply": "Session 已失效，需重新登录",
+            "checked_at": account.restriction_checked_at.isoformat(),
+        }
 
     except Exception as e:
         error_message = str(e)
+        logger.error(f"账号检查失败 {phone}: {error_message}", exc_info=True)
         account.restriction_status = "UNKNOWN"
         account.restriction_raw_reply = f"检查失败: {error_message[:_RAW_REPLY_DB_MAX - 10]}"
         account.restriction_checked_at = datetime.utcnow()
         db.commit()
         return {
             "account_id": account_id,
-            "phone": account.phone,
+            "phone": phone,
             "restriction_status": "UNKNOWN",
             "raw_reply": error_message[:200],
             "checked_at": account.restriction_checked_at.isoformat(),

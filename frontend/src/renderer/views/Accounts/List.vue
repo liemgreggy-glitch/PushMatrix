@@ -102,7 +102,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import StatCard from '../../components/StatCard.vue'
 import ActionMenu from '../../components/ActionMenu.vue'
 import { accountsApi } from '../../api/index.js'
-import logger from '../../utils/logger.js'
+import { logCheck, logCheckResult, logCheckStats } from '../../utils/checkLogger.js'
 
 const tableRef = ref(null)
 const accounts = ref([])
@@ -252,7 +252,7 @@ async function handleBatchCheckSpam(accountsToCheck) {
       { confirmButtonText: '开始检查', cancelButtonText: '取消', type: 'info' }
     )
   } catch {
-    logger.info('用户取消了批量检查')
+    // User cancelled – no action needed
     return
   }
 
@@ -260,22 +260,13 @@ async function handleBatchCheckSpam(accountsToCheck) {
   const delay = parseInt(localStorage.getItem('check_delay_ms') || '500', 10)
   const total = accountsToCheck.length
 
-  logger.task('检查限制', '='.repeat(70))
-  logger.task('检查限制', `🚀 开始检查 ${total} 个账号的限制状态`)
-  logger.task('检查限制', `⚙️ 并发数: ${concurrency}, 请求延迟: ${delay}ms`)
-  logger.task('检查限制', '='.repeat(70))
+  logCheck('='.repeat(70))
+  logCheck(`开始检查 ${total} 个账号，并发数: ${concurrency}`)
+  logCheck('='.repeat(70))
 
   const statusCounts = { UNRESTRICTED: 0, SPAM: 0, FROZEN: 0, BANNED: 0, UNKNOWN: 0 }
   const limit = createConcurrencyLimit(concurrency)
   let completed = 0
-
-  const STATUS_LABELS = {
-    UNRESTRICTED: '✅ 无限制',
-    SPAM: '⚠️ 垃圾邮件限制',
-    FROZEN: '❄️ 冻结',
-    BANNED: '🚫 封禁',
-    UNKNOWN: '❓ 未知/错误',
-  }
 
   const tasks = accountsToCheck.map((account, index) =>
     limit(async () => {
@@ -283,24 +274,22 @@ async function handleBatchCheckSpam(accountsToCheck) {
         await new Promise(r => setTimeout(r, delay))
       }
       try {
-        logger.task('检查限制', `[${index + 1}/${total}] 🔍 正在检查 ${account.phone}...`)
+        logCheck(`[${index + 1}/${total}] ${account.phone} → 正在连接...`)
         const result = await accountsApi.checkRestrictionStatus(account.id)
         completed++
         const status = result.restriction_status || 'UNKNOWN'
         statusCounts[status] = (statusCounts[status] || 0) + 1
-        const label = STATUS_LABELS[status] || status
-        logger.taskSuccess('检查限制', `[${index + 1}/${total}] ${account.phone} → ${label}`)
+        logCheckResult(index + 1, total, account.phone, status)
         if (completed % 10 === 0 || completed === total) {
-          logger.task(
-            '检查限制',
-            `📊 进度: ${completed}/${total} | ✅ ${statusCounts.UNRESTRICTED} ⚠️ ${statusCounts.SPAM} ❄️ ${statusCounts.FROZEN} 🚫 ${statusCounts.BANNED} ❓ ${statusCounts.UNKNOWN}`
+          logCheck(
+            `进度: ${completed}/${total} | ✅ ${statusCounts.UNRESTRICTED} ⚠️ ${statusCounts.SPAM} ❄️ ${statusCounts.FROZEN} 🚫 ${statusCounts.BANNED} ❓ ${statusCounts.UNKNOWN}`
           )
         }
         return result
       } catch (err) {
         completed++
         statusCounts.UNKNOWN = (statusCounts.UNKNOWN || 0) + 1
-        logger.taskError('检查限制', `[${index + 1}/${total}] ${account.phone} 检查失败`, err.message)
+        logCheckResult(index + 1, total, account.phone, 'ERROR')
         return { restriction_status: 'UNKNOWN' }
       }
     })
@@ -308,14 +297,15 @@ async function handleBatchCheckSpam(accountsToCheck) {
 
   await Promise.all(tasks)
 
-  logger.task('检查限制', '='.repeat(70))
-  logger.taskSuccess('检查限制', '✅ 检查完成！最终统计：')
-  logger.task('检查限制', `✅ 无限制: ${statusCounts.UNRESTRICTED} 个`)
-  logger.task('检查限制', `⚠️ 垃圾邮件限制: ${statusCounts.SPAM} 个`)
-  logger.task('检查限制', `❄️ 冻结: ${statusCounts.FROZEN} 个`)
-  logger.task('检查限制', `🚫 封禁: ${statusCounts.BANNED} 个`)
-  logger.task('检查限制', `❓ 未知/错误: ${statusCounts.UNKNOWN} 个`)
-  logger.task('检查限制', '='.repeat(70))
+  logCheck('='.repeat(70))
+  logCheckStats({
+    unrestricted: statusCounts.UNRESTRICTED,
+    spam: statusCounts.SPAM,
+    frozen: statusCounts.FROZEN,
+    banned: statusCounts.BANNED,
+    unknown: statusCounts.UNKNOWN,
+  })
+  logCheck('='.repeat(70))
 
   await loadAccounts()
   ElMessage.success(`检查完成！无限制: ${statusCounts.UNRESTRICTED}, 受限: ${statusCounts.SPAM + statusCounts.FROZEN + statusCounts.BANNED}`)
