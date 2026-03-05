@@ -275,16 +275,14 @@ async function loadAccounts() {
   loading.value = true
   try {
     const data = await accountsApi.getList()
-    if (data && data.accounts) {
-      accounts.value = data.accounts
-      const s = data.stats
+    accounts.value = data.items || data.accounts || (Array.isArray(data) ? data : [])
+    const s = data.stats
+    if (s) {
       stats.value.forEach(stat => {
-        if (s && stat.key in s) {
+        if (stat.key in s) {
           stat.value = s[stat.key]
         }
       })
-    } else {
-      accounts.value = Array.isArray(data) ? data : []
     }
   } catch (err) {
     ElMessage.error('加载账号列表失败')
