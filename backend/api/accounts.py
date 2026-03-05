@@ -434,6 +434,7 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         "FROZEN": "frozen",
         "BANNED": "banned",
         "UNAUTHORIZED": "disconnected",
+        "ERROR": "disconnected",
         "UNKNOWN": "disconnected",
     }
 
