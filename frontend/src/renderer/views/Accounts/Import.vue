@@ -264,10 +264,14 @@ async function processEntry(entry, files) {
     files.push(file)
   } else if (entry.isDirectory) {
     const reader = entry.createReader()
-    const entries = await new Promise((resolve) => reader.readEntries(resolve))
-    for (const subEntry of entries) {
-      await processEntry(subEntry, files)
-    }
+    // readEntries() returns at most 100 entries per call — loop until exhausted
+    let batch
+    do {
+      batch = await new Promise((resolve) => reader.readEntries(resolve))
+      for (const subEntry of batch) {
+        await processEntry(subEntry, files)
+      }
+    } while (batch.length > 0)
   }
 }
 
@@ -350,10 +354,24 @@ async function processFiles(files) {
 
   if (isElectron.value) {
     // Electron: write files directly to local sessions/未检查/ folder
-    importProgressText.value = `正在导入 ${supportedFiles.length} 个文件到本地...`
+    // ZIP/RAR extraction is not supported in local mode — warn and skip them
+    const archiveFiles = supportedFiles.filter(f => /\.(zip|rar)$/i.test(f.name))
+    const localFiles = supportedFiles.filter(f => /\.(session|json)$/i.test(f.name))
+    if (archiveFiles.length > 0) {
+      const shown = archiveFiles.slice(0, 5).map(f => f.name).join(', ')
+      const extra = archiveFiles.length > 5 ? ` 等 ${archiveFiles.length} 个` : ''
+      ElMessage.warning(`本地模式不支持压缩包，已跳过 ${archiveFiles.length} 个压缩文件（${shown}${extra}）`)
+    }
+    if (localFiles.length === 0) {
+      importStatus.value = 'exception'
+      importProgressText.value = '没有可导入的 .session / .json 文件'
+      importing.value = false
+      return
+    }
+    importProgressText.value = `正在导入 ${localFiles.length} 个文件到本地...`
     try {
       const fileList = []
-      for (const file of supportedFiles) {
+      for (const file of localFiles) {
         const buffer = await readFileAsArrayBuffer(file)
         fileList.push({ name: file.name, buffer: Array.from(new Uint8Array(buffer)) })
       }
