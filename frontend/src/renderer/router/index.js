@@ -3,15 +3,9 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 const routes = [
   {
     path: '/',
-    redirect: '/dashboard',
+    redirect: '/accounts/list',
     component: () => import('../components/Layout/MainLayout.vue'),
     children: [
-      {
-        path: '/dashboard',
-        name: 'Dashboard',
-        component: () => import('../views/Dashboard.vue'),
-        meta: { title: '数据面板', icon: 'DataBoard' },
-      },
       {
         path: '/accounts',
         redirect: '/accounts/list',
@@ -22,12 +16,6 @@ const routes = [
         name: 'AccountList',
         component: () => import('../views/Accounts/List.vue'),
         meta: { title: '账号列表', icon: 'User' },
-      },
-      {
-        path: '/accounts/groups',
-        name: 'AccountGroups',
-        component: () => import('../views/Accounts/Groups.vue'),
-        meta: { title: '账号分组', icon: 'FolderOpened' },
       },
       {
         path: '/accounts/import',

@@ -46,3 +46,17 @@ class BulkAction(BaseModel):
     action_type: str
     account_ids: List[int]
     params: Optional[dict] = None
+
+
+class BulkCheckSpam(BaseModel):
+    account_ids: List[int]
+
+
+class BulkSet2FA(BaseModel):
+    account_ids: List[int]
+    enable: bool = True
+
+
+class BulkUpdateProfile(BaseModel):
+    account_ids: List[int]
+    profile: dict

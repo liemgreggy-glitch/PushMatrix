@@ -10,18 +10,12 @@
       router
       class="sidebar-menu"
     >
-      <el-menu-item index="/dashboard">
-        <el-icon><DataBoard /></el-icon>
-        <span>数据面板</span>
-      </el-menu-item>
-
       <el-sub-menu index="accounts">
         <template #title>
           <el-icon><User /></el-icon>
           <span>账号管理</span>
         </template>
         <el-menu-item index="/accounts/list">账号列表</el-menu-item>
-        <el-menu-item index="/accounts/groups">账号分组</el-menu-item>
         <el-menu-item index="/accounts/import">批量导入</el-menu-item>
       </el-sub-menu>
 
