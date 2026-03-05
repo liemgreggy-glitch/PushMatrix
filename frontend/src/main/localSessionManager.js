@@ -62,23 +62,44 @@ class LocalSessionManager {
 
   /**
    * Save .session and .json files from an account object.
+   * @param {object} account - Account data from the backend.
+   * @param {ArrayBuffer|Buffer|null} sessionContent - Raw binary content of the .session file, if available.
+   * @param {object|null} jsonConfig - Parsed JSON config provided alongside the session file, if available.
    */
-  async saveSessionFromAccount(account) {
+  async saveSessionFromAccount(account, sessionContent = null, jsonConfig = null) {
     try {
       const folder = this.getFolderPath(account.restriction_status)
 
-      if (account.session_string) {
-        const sessionPath = path.join(folder, `${account.phone}.session`)
+      // 1. Save .session file
+      const sessionPath = path.join(folder, `${account.phone}.session`)
+      if (sessionContent) {
+        // Prefer original binary content when supplied
+        await fsp.writeFile(sessionPath, Buffer.from(sessionContent))
+        console.log(`✅ 保存 session (原始文件): ${sessionPath}`)
+      } else if (account.session_string) {
         await fsp.writeFile(sessionPath, account.session_string, 'utf8')
-        console.log(`✅ 保存 session: ${sessionPath}`)
+        console.log(`✅ 保存 session (session_string): ${sessionPath}`)
+      } else {
+        console.warn(`⚠️ 无法保存 session: ${account.phone} (无内容)`)
       }
 
-      const config = this._generateStandardConfig(account)
+      // 2. Build and save JSON config
+      let config
+      if (jsonConfig) {
+        // Merge user-supplied JSON with authoritative database values
+        config = {
+          ...jsonConfig,
+          ...this._generateStandardConfig(account),
+        }
+      } else {
+        config = this._generateStandardConfig(account)
+      }
+
       const configPath = path.join(folder, `${account.phone}.json`)
       await fsp.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8')
       console.log(`✅ 保存配置: ${configPath}`)
 
-      return { success: true }
+      return { success: true, sessionPath, configPath }
     } catch (err) {
       console.error(`❌ 保存失败 (${account.phone}):`, err)
       return { success: false, error: err.message }
@@ -93,7 +114,17 @@ class LocalSessionManager {
       const oldFolder = this.getFolderPath(oldStatus)
       const newFolder = this.getFolderPath(newStatus)
 
-      if (oldFolder === newFolder) return { success: true }
+      if (oldFolder === newFolder) {
+        console.log(`ℹ️ 文件夹相同，无需移动: ${phone}`)
+        return { success: true }
+      }
+
+      console.log(`📦 准备移动: ${phone}`)
+      console.log(`   从: ${oldFolder}`)
+      console.log(`   到: ${newFolder}`)
+
+      const movedFiles = []
+      const missingFiles = []
 
       for (const ext of ['.session', '.json']) {
         const oldFile = path.join(oldFolder, `${phone}${ext}`)
@@ -101,13 +132,20 @@ class LocalSessionManager {
         try {
           await fsp.access(oldFile)
           await fsp.rename(oldFile, newFile)
-          console.log(`✅ 移动: ${phone}${ext} → ${path.basename(newFolder)}`)
+          console.log(`✅ 移动成功: ${phone}${ext}`)
+          movedFiles.push(ext)
         } catch {
           // File doesn't exist in old folder – skip
+          console.warn(`⚠️ 源文件不存在: ${oldFile}`)
+          missingFiles.push(ext)
         }
       }
 
-      return { success: true }
+      if (missingFiles.length > 0) {
+        console.warn(`⚠️ ${phone} 缺少文件: ${missingFiles.join(', ')}`)
+      }
+
+      return { success: true, movedFiles, missingFiles }
     } catch (err) {
       console.error(`❌ 移动失败 (${phone}):`, err)
       return { success: false, error: err.message }

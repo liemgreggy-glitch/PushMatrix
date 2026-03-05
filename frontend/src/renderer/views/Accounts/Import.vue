@@ -148,11 +148,32 @@
     </div>
 
     <!-- 导入进度对话框 -->
-    <el-dialog v-model="showProgress" title="正在导入" width="400px" :close-on-click-modal="false" :close-on-press-escape="false">
-      <el-progress :percentage="importProgress" :status="importStatus" />
-      <p style="text-align: center; margin-top: 16px">
-        {{ importProgressText }}
-      </p>
+    <el-dialog v-model="showProgress" title="正在导入" width="500px" :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
+      <div style="padding: 8px 0;">
+        <div style="margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="color: #909399;">总进度</span>
+            <span style="color: #409eff; font-weight: bold;">{{ importProgress }}%</span>
+          </div>
+          <el-progress :percentage="importProgress" :status="importStatus" :stroke-width="20" />
+        </div>
+
+        <div v-if="totalBatches > 1" style="margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="color: #909399;">当前批次</span>
+            <span style="color: #909399;">{{ currentBatch }} / {{ totalBatches }}</span>
+          </div>
+          <el-progress :percentage="batchProgress" :stroke-width="10" />
+        </div>
+
+        <p style="text-align: center; margin-top: 16px; color: #909399;">
+          {{ importProgressText }}
+        </p>
+      </div>
+
+      <template v-if="importStatus !== ''" #footer>
+        <el-button @click="showProgress = false">关闭</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -172,6 +193,9 @@ const isDragover = ref(false)
 const importing = ref(false)
 const showProgress = ref(false)
 const importProgress = ref(0)
+const batchProgress = ref(0)
+const currentBatch = ref(0)
+const totalBatches = ref(0)
 const importStatus = ref('')
 const importProgressText = ref('')
 const importResults = ref([])
@@ -318,52 +342,86 @@ async function processFiles(files) {
   importing.value = true
   showProgress.value = true
   importProgress.value = 0
+  batchProgress.value = 0
+  currentBatch.value = 0
+  totalBatches.value = 0
   importResults.value = []
+  importStatus.value = ''
 
-  const formData = new FormData()
-  supportedFiles.forEach(file => {
-    formData.append('files', file)
-  })
+  // Split into batches of 10 files each
+  const batchSize = 10
+  const batches = []
+  for (let i = 0; i < supportedFiles.length; i += batchSize) {
+    batches.push(supportedFiles.slice(i, i + batchSize))
+  }
 
-  logger.task('导入', `准备上传 ${supportedFiles.length} 个文件到后端`)
+  totalBatches.value = batches.length
+  importProgressText.value = `准备上传 ${supportedFiles.length} 个文件（共 ${batches.length} 批）...`
+
+  logger.task('导入', `准备上传 ${supportedFiles.length} 个文件到后端，分 ${batches.length} 批`)
+
+  let allDetails = []
+  let totalSuccess = 0
+  let totalFailed = 0
 
   try {
-    importProgressText.value = '正在上传文件...'
-    logger.task('导入', '开始上传文件到后端')
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i]
+      currentBatch.value = i + 1
+      batchProgress.value = 0
+      importProgressText.value = `正在上传第 ${i + 1}/${batches.length} 批 (${batch.length} 个文件)...`
 
-    const result = await accountsApi.importFiles(formData, (progress) => {
-      const pct = Math.round(progress * 100)
-      importProgress.value = pct
-      // 每 10% 记录一次，避免日志过多
-      if (pct % 10 === 0) {
-        logger.task('导入', `上传进度: ${pct}%`)
+      logger.task('导入', `上传第 ${i + 1}/${batches.length} 批`)
+
+      const formData = new FormData()
+      batch.forEach(file => formData.append('files', file))
+
+      try {
+        const result = await accountsApi.importFiles(formData, (progress) => {
+          batchProgress.value = Math.round(progress * 100)
+          if (batchProgress.value % 10 === 0) {
+            logger.task('导入', `第 ${i + 1} 批上传进度: ${batchProgress.value}%`)
+          }
+        })
+
+        totalSuccess += result.success || 0
+        totalFailed += result.failed || 0
+        if (result.details) {
+          allDetails.push(...result.details)
+        }
+
+        logger.taskSuccess('导入', `第 ${i + 1} 批完成`, { success: result.success, failed: result.failed })
+
+        // Batch delay to avoid overloading the server
+        if (i < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+      } catch (err) {
+        logger.taskError('导入', `第 ${i + 1} 批失败`, err.message)
+        totalFailed += batch.length
       }
-    })
 
-    // 后端返回 { success, failed, details }
-    importResults.value = result.details || []
+      // Update overall progress
+      importProgress.value = Math.round(((i + 1) / batches.length) * 100)
+    }
+
+    importResults.value = allDetails
     importProgress.value = 100
-    importStatus.value = 'success'
-    importProgressText.value = `导入完成！成功 ${successCount.value} 个，失败 ${failCount.value} 个`
+    batchProgress.value = 100
+    importStatus.value = totalSuccess > 0 ? 'success' : 'exception'
+    importProgressText.value = `导入完成！成功 ${totalSuccess} 个，失败 ${totalFailed} 个`
 
-    logger.taskSuccess('导入', '后端处理完成', {
-      success: result.success,
-      failed: result.failed,
-      details: result.details,
-    })
+    logger.taskSuccess('导入', '全部批次完成', { success: totalSuccess, failed: totalFailed })
 
-    setTimeout(() => {
-      showProgress.value = false
-    }, 2000)
-
-    ElMessage.success(`成功导入 ${successCount.value} 个账号`)
-
-    if (successCount.value > 0) {
-      logger.taskSuccess('导入', `成功导入 ${successCount.value} 个账号`)
+    if (totalSuccess > 0) {
+      setTimeout(() => { showProgress.value = false }, 2000)
+      ElMessage.success(`成功导入 ${totalSuccess} 个账号`)
       // Save newly imported accounts to the local sessions directory
       if (isElectron.value) {
-        await saveImportedAccountsToLocal(result.details || [])
+        await saveImportedAccountsToLocal(allDetails, supportedFiles)
       }
+    } else {
+      ElMessage.error('全部导入失败！请检查文件格式')
     }
   } catch (err) {
     importStatus.value = 'exception'
@@ -376,14 +434,44 @@ async function processFiles(files) {
 }
 
 // Save newly imported accounts to the local sessions directory
-async function saveImportedAccountsToLocal(details) {
+async function saveImportedAccountsToLocal(details, uploadedFiles = []) {
   let savedCount = 0
   let failedCount = 0
   for (const detail of details) {
     if (detail.success && detail.id) {
       try {
         const account = await accountsApi.getOne(detail.id)
-        const result = await window.electron.ipcRenderer.invoke('save-session-to-local', { account })
+
+        // Find original uploaded files matching this phone number
+        const sessionFile = uploadedFiles.find(f =>
+          f.name.includes(detail.phone) && f.name.endsWith('.session')
+        )
+        const jsonFile = uploadedFiles.find(f =>
+          f.name.includes(detail.phone) && f.name.endsWith('.json')
+        )
+
+        // Read binary session content if available
+        let sessionContent = null
+        if (sessionFile) {
+          sessionContent = await readFileAsArrayBuffer(sessionFile)
+        }
+
+        // Parse JSON config if available
+        let jsonConfig = null
+        if (jsonFile) {
+          try {
+            const text = await readFileAsText(jsonFile)
+            jsonConfig = JSON.parse(text)
+          } catch (err) {
+            console.warn(`⚠️ JSON 解析失败 (${detail.phone}):`, err)
+          }
+        }
+
+        const result = await window.electron.ipcRenderer.invoke('save-session-to-local', {
+          account,
+          sessionContent,
+          jsonConfig,
+        })
         if (result && result.success) {
           savedCount++
         } else {
@@ -401,6 +489,26 @@ async function saveImportedAccountsToLocal(details) {
   if (failedCount > 0) {
     ElMessage.warning(`${failedCount} 个账号保存到本地失败，请检查 sessions 目录权限`)
   }
+}
+
+// Helper: read file as ArrayBuffer
+function readFileAsArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => resolve(e.target.result)
+    reader.onerror = reject
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+// Helper: read file as text
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => resolve(e.target.result)
+    reader.onerror = reject
+    reader.readAsText(file)
+  })
 }
 
 // Session 导入
