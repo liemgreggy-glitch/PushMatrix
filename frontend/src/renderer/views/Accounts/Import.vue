@@ -358,13 +358,14 @@ async function processFiles(files) {
         fileList.push({ name: file.name, buffer: Array.from(new Uint8Array(buffer)) })
       }
       const result = await window.electron.ipcRenderer.invoke('import-files-locally', { fileList })
-      importResults.value = result.details || []
+      const safeResult = (result && typeof result === 'object') ? result : { success: 0, failed: 0, details: [] }
+      importResults.value = safeResult.details || []
       importProgress.value = 100
-      importStatus.value = result.success > 0 ? 'success' : 'exception'
-      importProgressText.value = `导入完成！成功 ${result.success} 个，失败 ${result.failed} 个`
-      if (result.success > 0) {
+      importStatus.value = safeResult.success > 0 ? 'success' : 'exception'
+      importProgressText.value = `导入完成！成功 ${safeResult.success} 个，失败 ${safeResult.failed} 个`
+      if (safeResult.success > 0) {
         setTimeout(() => { showProgress.value = false }, 2000)
-        ElMessage.success(`成功导入 ${result.success} 个账号到本地`)
+        ElMessage.success(`成功导入 ${safeResult.success} 个账号到本地`)
       } else {
         ElMessage.error('全部导入失败！请检查文件格式')
       }
@@ -476,9 +477,10 @@ async function processFiles(files) {
 
 // Save newly imported accounts to the local sessions directory
 async function saveImportedAccountsToLocal(details, uploadedFiles = []) {
+  const safeDetails = Array.isArray(details) ? details : []
   let savedCount = 0
   let failedCount = 0
-  for (const detail of details) {
+  for (const detail of safeDetails) {
     if (detail.success && detail.id) {
       try {
         const account = await accountsApi.getOne(detail.id)
@@ -579,13 +581,14 @@ async function importSession() {
         { name: `${phone}.session`, buffer: Array.from(new TextEncoder().encode(sessionForm.value.session_string)) },
       ]
       const result = await window.electron.ipcRenderer.invoke('import-files-locally', { fileList })
-      if (result.success > 0) {
+      const safeResult = (result && typeof result === 'object') ? result : { success: 0, failed: 0, details: [] }
+      if (safeResult.success > 0) {
         logger.taskSuccess('导入', 'Session 导入成功（本地）', { phone })
         ElMessage.success('Session 导入成功')
         importResults.value.unshift({ filename: 'Session 字符串', phone, success: true, message: '导入成功' })
         sessionForm.value = { session_string: '', phone: '', api_id: '', api_hash: '' }
       } else {
-        const msg = result.details?.[0]?.message || '导入失败'
+        const msg = safeResult.details?.[0]?.message || '导入失败'
         logger.taskError('导入', 'Session 导入失败（本地）', msg)
         ElMessage.error(msg)
       }
