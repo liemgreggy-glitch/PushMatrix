@@ -37,6 +37,7 @@ REQUIRED_COLUMNS = {
         'remark': 'TEXT',
         'restriction_status': 'VARCHAR(20)',
         'restriction_raw_reply': 'TEXT',
+        'restriction_expire_time': 'VARCHAR(10)',
         'restriction_checked_at': 'DATETIME',
         'created_at': 'DATETIME DEFAULT CURRENT_TIMESTAMP',
         'updated_at': 'DATETIME DEFAULT CURRENT_TIMESTAMP',

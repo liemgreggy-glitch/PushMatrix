@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 # Mapping from restriction_status → folder name (Chinese)
 _STATUS_FOLDERS: Dict[Optional[str], str] = {
     "UNRESTRICTED": "无限制",
-    "SPAM": "垃圾邮件",
+    "SPAM_PERMANENT": "永久垃圾邮件",
+    "SPAM_TEMPORARY": "临时垃圾邮件",
+    "SPAM": "永久垃圾邮件",  # legacy value → same bucket as SPAM_PERMANENT
     "FROZEN": "冻结",
     "BANNED": "封禁",
     "UNKNOWN": "未知错误",
@@ -29,7 +31,9 @@ _STATUS_FOLDERS: Dict[Optional[str], str] = {
 # Mapping from restriction_status → spamblock string for JSON
 _SPAMBLOCK_MAP: Dict[Optional[str], str] = {
     "UNRESTRICTED": "free",
-    "SPAM": "spam",
+    "SPAM_PERMANENT": "spam_permanent",
+    "SPAM_TEMPORARY": "spam_temporary",
+    "SPAM": "spam",  # legacy value
     "FROZEN": "frozen",
     "BANNED": "banned",
 }
