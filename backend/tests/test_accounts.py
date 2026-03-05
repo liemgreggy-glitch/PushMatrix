@@ -271,20 +271,23 @@ def test_check_restriction_not_found(client):
 
 
 def test_check_restriction_no_session(client):
-    """check-restriction returns UNKNOWN when no session_string."""
+    """check-restriction returns UNKNOWN_ERROR when no session_string."""
     acc = client.post("/api/accounts/", json={"phone": "+1234567890"}).json()
     response = client.post(f"/api/accounts/{acc['id']}/check-restriction")
     assert response.status_code == 200
     data = response.json()
-    assert data["restriction_status"] == "UNKNOWN"
+    assert data["restriction_status"] == "UNKNOWN_ERROR"
     assert data["phone"] == "+1234567890"
     assert "error" in data
 
 
 def test_check_restriction_no_api_credentials(client, monkeypatch):
-    """check-restriction returns UNKNOWN when session exists but no api_id/api_hash."""
+    """check-restriction returns UNKNOWN_ERROR when session exists but no api_id/api_hash."""
     monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_API_HASH", raising=False)
+    import api.accounts as accounts_mod
+    monkeypatch.setattr(accounts_mod.app_settings, "telegram_api_id", None)
+    monkeypatch.setattr(accounts_mod.app_settings, "telegram_api_hash", None)
     acc = client.post(
         "/api/accounts/",
         json={"phone": "+1234567890", "session_string": "fake_session"},
@@ -292,7 +295,7 @@ def test_check_restriction_no_api_credentials(client, monkeypatch):
     response = client.post(f"/api/accounts/{acc['id']}/check-restriction")
     assert response.status_code == 200
     data = response.json()
-    assert data["restriction_status"] == "UNKNOWN"
+    assert data["restriction_status"] == "UNKNOWN_ERROR"
     assert "error" in data
 
 
