@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -837,11 +838,14 @@ def _process_extracted_files(directory: str, db: Session) -> Dict[str, Any]:
 
 
 def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
+    """Process a .session file and convert to StringSession format."""
+    phone = ""
     try:
-        with open(file_path, "rb") as f:
-            session_content = f.read()
+        from telethon.sessions import StringSession, SQLiteSession
 
         phone = filename.removesuffix(".session")
+        # Sanitize phone to prevent path traversal when used as a filename
+        safe_phone = os.path.basename(phone)
 
         existing = db.query(Account).filter(Account.phone == phone).first()
         if existing:
@@ -852,11 +856,29 @@ def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
                 "message": "手机号已存在",
             }
 
+        # Convert SQLite session to StringSession
+        # Create a temporary copy without the .session extension for SQLiteSession
+        temp_dir = tempfile.mkdtemp()
+        try:
+            temp_session_path = os.path.join(temp_dir, safe_phone)
+            shutil.copy(file_path, temp_session_path + ".session")
+
+            # Load SQLite session and convert to string
+            sqlite_session = SQLiteSession(temp_session_path)
+            sqlite_session.save()  # Ensure it's loaded
+            string_session = StringSession.save(sqlite_session)
+
+            if not string_session:
+                raise ValueError("Failed to convert session to StringSession format")
+
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
         country_name, country_flag, country_code = get_country_from_phone(phone)
 
         account = Account(
             phone=phone,
-            session_string=session_content.hex() if session_content else None,
+            session_string=string_session,
             country=country_name,
             country_flag=country_flag,
             country_code=country_code,
@@ -873,7 +895,12 @@ def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
             "id": account.id,
         }
     except Exception as e:
-        return {"filename": filename, "phone": "", "success": False, "message": str(e)}
+        return {
+            "filename": filename,
+            "phone": phone,
+            "success": False,
+            "message": f"Session 转换失败: {str(e)}",
+        }
 
 
 def _create_account_from_config(config: dict, db: Session) -> dict:
