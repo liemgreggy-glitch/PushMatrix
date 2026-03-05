@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('electron', {
       }
     },
     on: (channel, func) => {
-      const validChannels = ['append-log']
+      const validChannels = ['append-log', 'sessions-changed']
       if (validChannels.includes(channel)) {
         ipcRenderer.on(channel, (event, ...args) => func(...args))
       }
