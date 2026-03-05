@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 import tempfile
 import zipfile
 from datetime import datetime
@@ -8,15 +9,54 @@ from typing import Any, Dict, List, Optional
 
 import rarfile
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from config import settings as app_settings
 from database.connection import get_db
 from models.account import Account
 from utils.phone_parser import get_country_from_phone, parse_2fa_from_json
 
 logger = logging.getLogger(__name__)
+
+# Windows 颜色支持（终端 ANSI）
+if sys.platform == 'win32':
+    try:
+        import colorama
+        colorama.just_fix_windows_console()
+    except ImportError:
+        pass
+
+# ANSI 颜色码
+_ANSI = {
+    'RESET': '\x1b[0m',
+    'GREEN': '\x1b[32m',
+    'YELLOW': '\x1b[33m',
+    'BLUE': '\x1b[36m',
+    'RED': '\x1b[31m',
+    'DIM_YELLOW': '\x1b[2m\x1b[33m',
+}
+
+def _get_ts() -> str:
+    """返回 [HH:MM:SS] 时间戳"""
+    now = datetime.now()
+    return f"[{now.hour:02d}:{now.minute:02d}:{now.second:02d}]"
+
+
+def _log_plain(msg: str) -> None:
+    """白色无等级日志，格式：[HH:MM:SS] msg"""
+    print(f"{_get_ts()} {msg}", flush=True)
+
+
+def _get_api_credentials(account) -> tuple:
+    """
+    返回账号的 (api_id, api_hash)。
+    优先使用账号自身存储的值，否则回退到全局 config（从环境变量 / .env 文件读取，内置默认值已在 config.py 配置）。
+    """
+    api_id = account.api_id or app_settings.telegram_api_id
+    api_hash = account.api_hash or app_settings.telegram_api_hash
+    return api_id, api_hash
 
 router = APIRouter(prefix="/api/accounts", tags=["账号管理"])
 
@@ -49,7 +89,26 @@ class ImportSessionRequest(BaseModel):
     session_string: str
     phone: Optional[str] = ""
     api_id: Optional[int] = None
-    api_hash: Optional[str] = ""
+    api_hash: Optional[str] = None
+
+    @field_validator('api_id', mode='before')
+    @classmethod
+    def _coerce_api_id(cls, v):
+        """空字符串视为 None，避免前端留空时产生 422 错误。"""
+        if v == '' or v is None:
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return None
+
+    @field_validator('api_hash', mode='before')
+    @classmethod
+    def _coerce_api_hash(cls, v):
+        """空字符串视为 None。"""
+        if v == '':
+            return None
+        return v
 
 
 class BulkActionRequest(BaseModel):
@@ -338,51 +397,52 @@ async def check_spam_status_single(account_id: int, db: Session = Depends(get_db
         from telethon import TelegramClient
         from telethon.sessions import StringSession
 
-        api_id = account.api_id or int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
-        api_hash = account.api_hash or os.environ.get("TELEGRAM_API_HASH", "")
+        api_id, api_hash = _get_api_credentials(account)
 
         if not api_id or not api_hash:
             return {"success": False, "account_id": account_id, "phone": account.phone,
-                    "status": "disconnected", "message": "账号缺少 API ID / API Hash，请在账号或系统设置中配置"}
+                    "status": "disconnected",
+                    "message": "账号缺少 API ID / API Hash，请在账号或系统设置中配置（或设置环境变量 TELEGRAM_API_ID / TELEGRAM_API_HASH）"}
 
         client = TelegramClient(StringSession(account.session_string), api_id, api_hash)
-        await client.connect()
+        try:
+            await client.connect()
 
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            account.status = "disconnected"
+            if not await client.is_user_authorized():
+                account.status = "disconnected"
+                db.commit()
+                return {"success": True, "account_id": account_id, "phone": account.phone,
+                        "status": "disconnected", "message": "账号未授权"}
+
+            await client.send_message("@SpamBot", "/start")
+
+            import asyncio
+            await asyncio.sleep(3)
+
+            messages = await client.get_messages("@SpamBot", limit=1)
+            reply_text = messages[0].text.lower() if messages else ""
+
+            if any(k in reply_text for k in ("good news", "no limits", "no complaints")):
+                new_status = "unlimited"
+            elif any(k in reply_text for k in ("spam", "limited")):
+                new_status = "spam"
+            elif any(k in reply_text for k in ("frozen", "suspended")):
+                new_status = "frozen"
+            elif any(k in reply_text for k in ("banned", "deleted", "deactivated")):
+                new_status = "banned"
+            else:
+                new_status = "idle"
+
+            account.status = new_status
+            account.is_spam = new_status == "spam"
+            account.is_banned = new_status == "banned"
             db.commit()
+
             return {"success": True, "account_id": account_id, "phone": account.phone,
-                    "status": "disconnected", "message": "账号未授权"}
-
-        await client.send_message("@SpamBot", "/start")
-
-        import asyncio
-        await asyncio.sleep(3)
-
-        messages = await client.get_messages("@SpamBot", limit=1)
-        reply_text = messages[0].text.lower() if messages else ""
-
-        await client.disconnect()
-
-        if any(k in reply_text for k in ("good news", "no limits", "no complaints")):
-            new_status = "unlimited"
-        elif any(k in reply_text for k in ("spam", "limited")):
-            new_status = "spam"
-        elif any(k in reply_text for k in ("frozen", "suspended")):
-            new_status = "frozen"
-        elif any(k in reply_text for k in ("banned", "deleted", "deactivated")):
-            new_status = "banned"
-        else:
-            new_status = "idle"
-
-        account.status = new_status
-        account.is_spam = new_status == "spam"
-        account.is_banned = new_status == "banned"
-        db.commit()
-
-        return {"success": True, "account_id": account_id, "phone": account.phone,
-                "status": new_status, "reply": reply_text[:200]}
+                    "status": new_status, "reply": reply_text[:200]}
+        finally:
+            if client.is_connected():
+                await client.disconnect()
 
     except Exception as e:
         return {"success": False, "account_id": account_id, "phone": account.phone,
@@ -404,6 +464,8 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         "SPAM": "spam",
         "FROZEN": "frozen",
         "BANNED": "banned",
+        "UNAUTHORIZED": "disconnected",
+        "ERROR": "disconnected",
         "UNKNOWN": "disconnected",
     }
 
@@ -419,25 +481,27 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             "account_id": account_id,
             "phone": account.phone,
             "restriction_status": "UNKNOWN",
+            "status_text": "❓ 未知/错误",
             "raw_reply": "缺少 session_string",
             "checked_at": datetime.utcnow().isoformat(),
             "error": "无法检查：缺少有效的 session",
         }
 
-    api_id = account.api_id or int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
-    api_hash = account.api_hash or os.environ.get("TELEGRAM_API_HASH", "")
+    api_id, api_hash = _get_api_credentials(account)
 
     if not api_id or not api_hash:
         return {
             "account_id": account_id,
             "phone": account.phone,
             "restriction_status": "UNKNOWN",
+            "status_text": "❓ 未知/错误",
             "raw_reply": "缺少 API ID / API Hash",
             "checked_at": datetime.utcnow().isoformat(),
-            "error": "账号缺少 API ID / API Hash，请在账号或系统设置中配置",
+            "error": "账号缺少 API ID / API Hash，请在账号或系统设置中配置（或设置环境变量 TELEGRAM_API_ID / TELEGRAM_API_HASH）",
         }
 
     phone = account.phone
+    client = None
 
     try:
         from telethon import TelegramClient
@@ -448,7 +512,8 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         )
         from telethon.sessions import StringSession
 
-        logger.info(f"正在连接账号 {phone}...")
+        # 步骤 1: 创建 client
+        _log_plain(f"{phone} → 正在创建 client")
         client = TelegramClient(
             StringSession(account.session_string),
             api_id,
@@ -456,10 +521,13 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             connection_retries=3,
             retry_delay=1,
         )
+
+        # 步骤 2: 连接 Telegram
+        _log_plain(f"{phone} → 正在连接 Telegram")
         await client.connect()
 
         if not client.is_connected():
-            logger.error(f"账号 {phone} 连接失败")
+            _log_plain(f"{phone} → 错误: 连接失败")
             account.restriction_status = "UNKNOWN"
             account.restriction_raw_reply = "无法连接到 Telegram"
             account.restriction_checked_at = datetime.utcnow()
@@ -468,61 +536,66 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
                 "account_id": account_id,
                 "phone": phone,
                 "restriction_status": "UNKNOWN",
+                "status_text": "❓ 未知/错误",
                 "raw_reply": "无法连接到 Telegram",
                 "checked_at": account.restriction_checked_at.isoformat(),
                 "error": "连接失败",
             }
 
-        logger.info(f"账号 {phone} 已连接到 Telegram")
+        _log_plain(f"{phone} → 已连接到 Telegram")
 
+        # 步骤 3: 授权检查
+        _log_plain(f"{phone} → 授权检查")
         if not await client.is_user_authorized():
-            await client.disconnect()
-            logger.warning(f"账号 {phone} 未授权或 session 已失效")
-            account.restriction_status = "UNKNOWN"
+            _log_plain(f"{phone} → 未授权/未登录")
+            account.restriction_status = "UNAUTHORIZED"
             account.restriction_raw_reply = "账号未授权或 session 已失效"
             account.restriction_checked_at = datetime.utcnow()
             db.commit()
             return {
                 "account_id": account_id,
                 "phone": phone,
-                "restriction_status": "UNKNOWN",
+                "restriction_status": "UNAUTHORIZED",
+                "status_text": "❌ 未登录/未授权",
                 "raw_reply": "账号未授权或 session 已失效",
                 "checked_at": account.restriction_checked_at.isoformat(),
             }
 
-        logger.info(f"账号 {phone} 授权状态正常")
+        _log_plain(f"{phone} → 授权检查通过")
 
+        # 步骤 4: 联系 @SpamBot
+        _log_plain(f"{phone} → 正在联系 @SpamBot")
         try:
-            logger.info(f"正在联系 @SpamBot 检查账号 {phone}...")
             async with client.conversation("SpamBot", timeout=30) as conv:
                 await conv.send_message("/start")
-                logger.info(f"已向 @SpamBot 发送 /start (账号 {phone})")
+                _log_plain(f"{phone} → 已发送 /start")
                 resp = await conv.get_response()
-                raw_reply = resp.text
+                raw_reply = resp.raw_text  # 使用 raw_text
 
-            logger.info(f"收到 @SpamBot 回复 (账号 {phone}): {raw_reply[:100]}...")
-
-            await client.disconnect()
-            logger.info(f"账号 {phone} 已断开连接")
+            _log_plain(f"{phone} → 收到回复 ({len(raw_reply)} 字符)")
 
             raw_reply_lower = raw_reply.lower()
 
+            # 步骤 5: 解析状态
             if any(k in raw_reply_lower for k in _UNRESTRICTED_KW):
                 restriction_status = "UNRESTRICTED"
-                logger.info(f"账号 {phone} 状态: 无限制")
+                status_text = "✅ 无限制"
             elif any(k in raw_reply_lower for k in _SPAM_KW):
                 restriction_status = "SPAM"
-                logger.warning(f"账号 {phone} 状态: 垃圾邮件限制")
+                status_text = "⚠️ 垃圾邮件"
             elif any(k in raw_reply_lower for k in _FROZEN_KW):
                 restriction_status = "FROZEN"
-                logger.warning(f"账号 {phone} 状态: 冻结")
+                status_text = "❄️ 冻结"
             elif any(k in raw_reply_lower for k in _BANNED_KW):
                 restriction_status = "BANNED"
-                logger.error(f"账号 {phone} 状态: 封禁")
+                status_text = "🚫 封禁"
             else:
                 restriction_status = "UNKNOWN"
-                logger.warning(f"账号 {phone} 无法识别 SpamBot 回复，返回 UNKNOWN")
+                status_text = "❓ 未知/错误"
 
+            _log_plain(f"{phone} → 解析状态: {restriction_status}")
+
+            # 步骤 6: 更新数据库
             account.restriction_status = restriction_status
             account.restriction_raw_reply = raw_reply[:_RAW_REPLY_DB_MAX]
             account.restriction_checked_at = datetime.utcnow()
@@ -531,18 +604,17 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             account.is_banned = restriction_status == "BANNED"
             db.commit()
 
-            logger.info(f"账号 {phone} 检查完成，状态: {restriction_status}")
             return {
                 "account_id": account_id,
                 "phone": phone,
                 "restriction_status": restriction_status,
+                "status_text": status_text,
                 "raw_reply": raw_reply[:_RAW_REPLY_API_MAX],
                 "checked_at": account.restriction_checked_at.isoformat(),
             }
 
         except FloodWaitError as e:
-            logger.warning(f"账号 {phone} 触发 Telegram 限流，需等待 {e.seconds} 秒")
-            await client.disconnect()
+            _log_plain(f"{phone} → 错误: Telegram 限流，需等待 {e.seconds} 秒")
             account.restriction_status = "UNKNOWN"
             account.restriction_raw_reply = f"Telegram 限流，需等待 {e.seconds} 秒"
             account.restriction_checked_at = datetime.utcnow()
@@ -551,19 +623,31 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
                 "account_id": account_id,
                 "phone": phone,
                 "restriction_status": "UNKNOWN",
+                "status_text": "❓ 未知/错误",
                 "raw_reply": f"Telegram 限流，需等待 {e.seconds} 秒",
                 "checked_at": account.restriction_checked_at.isoformat(),
                 "error": f"flood_wait_{e.seconds}",
             }
 
         except Exception as e:
-            logger.error(f"账号 {phone} 与 SpamBot 对话失败: {e}", exc_info=True)
-            if client.is_connected():
-                await client.disconnect()
-            raise
+            # 异常不能吞掉：必须打印
+            _log_plain(f"{phone} → 错误: {str(e)}")
+            account.restriction_status = "ERROR"
+            account.restriction_raw_reply = f"检查失败: {str(e)[:_RAW_REPLY_DB_MAX - 10]}"
+            account.restriction_checked_at = datetime.utcnow()
+            db.commit()
+            return {
+                "account_id": account_id,
+                "phone": phone,
+                "restriction_status": "ERROR",
+                "status_text": "❓ 未知/错误",
+                "raw_reply": str(e)[:200],
+                "checked_at": account.restriction_checked_at.isoformat(),
+                "error": str(e),
+            }
 
     except PhoneNumberBannedError:
-        logger.error(f"账号 {phone} 手机号已被 Telegram 封禁")
+        _log_plain(f"{phone} → 错误: 手机号已被 Telegram 封禁")
         account.restriction_status = "BANNED"
         account.restriction_raw_reply = "手机号已被 Telegram 封禁"
         account.restriction_checked_at = datetime.utcnow()
@@ -573,39 +657,49 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             "account_id": account_id,
             "phone": phone,
             "restriction_status": "BANNED",
+            "status_text": "🚫 封禁",
             "raw_reply": "手机号已被 Telegram 封禁",
             "checked_at": account.restriction_checked_at.isoformat(),
         }
 
     except AuthKeyUnregisteredError:
-        logger.error(f"账号 {phone} Session 已失效")
-        account.restriction_status = "UNKNOWN"
+        _log_plain(f"{phone} → 错误: Session 已失效")
+        account.restriction_status = "UNAUTHORIZED"
         account.restriction_raw_reply = "Session 已失效，需重新登录"
         account.restriction_checked_at = datetime.utcnow()
         db.commit()
         return {
             "account_id": account_id,
             "phone": phone,
-            "restriction_status": "UNKNOWN",
+            "restriction_status": "UNAUTHORIZED",
+            "status_text": "❌ 未登录/未授权",
             "raw_reply": "Session 已失效，需重新登录",
             "checked_at": account.restriction_checked_at.isoformat(),
         }
 
     except Exception as e:
         error_message = str(e)
-        logger.error(f"账号检查失败 {phone}: {error_message}", exc_info=True)
-        account.restriction_status = "UNKNOWN"
+        # 异常不能吞掉：必须打印
+        _log_plain(f"{phone} → 错误: {error_message}")
+        account.restriction_status = "ERROR"
         account.restriction_raw_reply = f"检查失败: {error_message[:_RAW_REPLY_DB_MAX - 10]}"
         account.restriction_checked_at = datetime.utcnow()
         db.commit()
         return {
             "account_id": account_id,
             "phone": phone,
-            "restriction_status": "UNKNOWN",
+            "restriction_status": "ERROR",
+            "status_text": "❓ 未知/错误",
             "raw_reply": error_message[:200],
-            "checked_at": account.restriction_checked_at.isoformat(),
+            "checked_at": datetime.utcnow().isoformat(),
             "error": error_message,
         }
+
+    finally:
+        # 步骤 7: 确保断开连接
+        if client and client.is_connected():
+            await client.disconnect()
+            _log_plain(f"{phone} → 已断开连接")
 
 
 @router.post("/bulk/set-2fa")
@@ -775,7 +869,7 @@ def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
             "filename": filename,
             "phone": phone,
             "success": True,
-            "message": "导入成功",
+            "message": "导入成功（如需检查限制状态，请确保已配置 API ID / API Hash）",
             "id": account.id,
         }
     except Exception as e:

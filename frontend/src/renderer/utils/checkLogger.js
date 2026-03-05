@@ -32,8 +32,8 @@ const STATUS_CONFIG = {
   FROZEN: { cssColor: CSS.blue, ansiColor: ANSI.blue, emoji: '❄️', text: '冻结' },
   BANNED: { cssColor: CSS.red, ansiColor: ANSI.red, emoji: '🚫', text: '封禁' },
   UNKNOWN: { cssColor: CSS.dimYellow, ansiColor: ANSI.dimYellow, emoji: '❓', text: '未知/错误' },
-  ERROR: { cssColor: CSS.red, ansiColor: ANSI.red, emoji: '❌', text: '检查失败' },
-  UNAUTHORIZED: { cssColor: CSS.dimYellow, ansiColor: ANSI.dimYellow, emoji: '❓', text: '未授权' },
+  ERROR: { cssColor: CSS.dimYellow, ansiColor: ANSI.dimYellow, emoji: '❓', text: '未知/错误' },
+  UNAUTHORIZED: { cssColor: CSS.red, ansiColor: ANSI.red, emoji: '❌', text: '未登录/未授权' },
 }
 
 // 是否在 Electron 环境
@@ -50,15 +50,17 @@ function getTimestamp() {
 }
 
 /**
- * 向 Electron 主进程发送带 ANSI 颜色的日志（显示在终端）
- * @param {string} message
- * @param {string} ansiColor
+ * 向 Electron 主进程发送日志（显示在控制台窗口）
+ * 使用 plain 级别，避免 console.html 添加额外的时间戳和 INFO 前缀
+ * @param {string} message  - 不含 ANSI 码的纯文本消息
+ * @param {string} cssColor - CSS 颜色值（可选，用于控制台窗口着色）
  */
-function sendToMain(message, ansiColor = ANSI.white) {
+function sendToMain(message, cssColor = null) {
   if (!isElectron) return
   window.electron.ipcRenderer.send('log-message', {
-    level: 'info',
-    message: `${ansiColor}${message}${ANSI.reset}`,
+    level: 'plain',
+    message,
+    color: cssColor,
     data: null,
   })
 }
@@ -71,7 +73,7 @@ export function logCheck(message) {
   const ts = getTimestamp()
   const full = `${ts} ${message}`
   console.log(`%c${full}`, CSS.white)
-  sendToMain(full, ANSI.white)
+  sendToMain(full)
 }
 
 /**
@@ -87,12 +89,12 @@ export function logCheckResult(index, total, phone, status) {
   const message = `[${index}/${total}] ${phone} → ${cfg.emoji} ${cfg.text}`
   const full = `${ts} ${message}`
   console.log(`%c${full}`, cfg.cssColor)
-  sendToMain(full, cfg.ansiColor)
+  sendToMain(full, cfg.cssColor)
 }
 
 /**
  * 输出最终统计结果
- * @param {{ unrestricted: number, spam: number, frozen: number, banned: number, unknown: number }} stats
+ * @param {{ unrestricted: number, spam: number, frozen: number, banned: number, unknown: number, unauthorized?: number }} stats
  */
 export function logCheckStats(stats) {
   logCheck(`✅ 检查完成！最终统计：`)
@@ -100,31 +102,37 @@ export function logCheckStats(stats) {
     const ts = getTimestamp()
     const msg = `${ts} ✅ 无限制: ${stats.unrestricted}`
     console.log(`%c${msg}`, CSS.green)
-    sendToMain(msg, ANSI.green)
+    sendToMain(msg, CSS.green)
   }
   if (stats.spam > 0) {
     const ts = getTimestamp()
     const msg = `${ts} ⚠️ 垃圾邮件限制: ${stats.spam}`
     console.log(`%c${msg}`, CSS.yellow)
-    sendToMain(msg, ANSI.yellow)
+    sendToMain(msg, CSS.yellow)
   }
   if (stats.frozen > 0) {
     const ts = getTimestamp()
     const msg = `${ts} ❄️ 冻结: ${stats.frozen}`
     console.log(`%c${msg}`, CSS.blue)
-    sendToMain(msg, ANSI.blue)
+    sendToMain(msg, CSS.blue)
   }
   if (stats.banned > 0) {
     const ts = getTimestamp()
     const msg = `${ts} 🚫 封禁: ${stats.banned}`
     console.log(`%c${msg}`, CSS.red)
-    sendToMain(msg, ANSI.red)
+    sendToMain(msg, CSS.red)
+  }
+  if (stats.unauthorized > 0) {
+    const ts = getTimestamp()
+    const msg = `${ts} ❌ 未登录/未授权: ${stats.unauthorized}`
+    console.log(`%c${msg}`, CSS.red)
+    sendToMain(msg, CSS.red)
   }
   if (stats.unknown > 0) {
     const ts = getTimestamp()
     const msg = `${ts} ❓ 未知/错误: ${stats.unknown}`
     console.log(`%c${msg}`, CSS.dimYellow)
-    sendToMain(msg, ANSI.dimYellow)
+    sendToMain(msg, CSS.dimYellow)
   }
 }
 

@@ -377,7 +377,15 @@ async function importSession() {
   importing.value = true
   logger.task('导入', 'Session 字符串导入开始', { phone: sessionForm.value.phone || '未填写' })
   try {
-    const result = await accountsApi.importSession(sessionForm.value)
+    // 空字符串转 null，避免后端 Pydantic 因 api_id="" 产生 422 错误
+    const rawApiId = parseInt(sessionForm.value.api_id, 10)
+    const payload = {
+      session_string: sessionForm.value.session_string,
+      phone: sessionForm.value.phone || '',
+      api_id: sessionForm.value.api_id && !isNaN(rawApiId) ? rawApiId : null,
+      api_hash: sessionForm.value.api_hash || null,
+    }
+    const result = await accountsApi.importSession(payload)
     if (result.success) {
       logger.taskSuccess('导入', 'Session 导入成功', result.account)
       ElMessage.success('Session 导入成功')
