@@ -12,7 +12,7 @@ const ANSI = {
   yellow: '\x1b[33m',
   blue: '\x1b[36m',
   red: '\x1b[31m',
-  dimYellow: '\x1b[2m\x1b[33m',
+  pink: '\x1b[35m',
 }
 
 // CSS 颜色（用于浏览器 / Electron 渲染进程控制台）
@@ -22,7 +22,7 @@ const CSS = {
   yellow: 'color: #f59e0b',
   blue: 'color: #38bdf8',
   red: 'color: #ef4444',
-  dimYellow: 'color: #fbbf24; opacity: 0.8',
+  pink: 'color: #ec4899',
 }
 
 // 状态 → 样式映射
@@ -31,8 +31,8 @@ const STATUS_CONFIG = {
   SPAM: { cssColor: CSS.yellow, ansiColor: ANSI.yellow, emoji: '⚠️', text: '垃圾邮件' },
   FROZEN: { cssColor: CSS.blue, ansiColor: ANSI.blue, emoji: '❄️', text: '冻结' },
   BANNED: { cssColor: CSS.red, ansiColor: ANSI.red, emoji: '🚫', text: '封禁' },
-  UNKNOWN: { cssColor: CSS.dimYellow, ansiColor: ANSI.dimYellow, emoji: '❓', text: '未知/错误' },
-  ERROR: { cssColor: CSS.dimYellow, ansiColor: ANSI.dimYellow, emoji: '❓', text: '未知/错误' },
+  UNKNOWN: { cssColor: CSS.pink, ansiColor: ANSI.pink, emoji: '❓', text: '未知/错误' },
+  ERROR: { cssColor: CSS.pink, ansiColor: ANSI.pink, emoji: '❓', text: '未知/错误' },
   UNAUTHORIZED: { cssColor: CSS.red, ansiColor: ANSI.red, emoji: '❌', text: '未登录/未授权' },
 }
 
@@ -131,8 +131,8 @@ export function logCheckStats(stats) {
   if (stats.unknown > 0) {
     const ts = getTimestamp()
     const msg = `${ts} ❓ 未知/错误: ${stats.unknown}`
-    console.log(`%c${msg}`, CSS.dimYellow)
-    sendToMain(msg, CSS.dimYellow)
+    console.log(`%c${msg}`, CSS.pink)
+    sendToMain(msg, CSS.pink)
   }
 }
 
