@@ -50,6 +50,7 @@ export const accountsApi = {
   delete: (id) => http.delete(`/api/accounts/${id}`),
   bulkAction: (data) => http.post('/api/accounts/bulk-action', data),
   bulkCheckSpam: (data) => http.post('/api/accounts/bulk/check-spam', data),
+  bulkDelete: (data) => http.post('/api/accounts/bulk/delete', data),
   bulkSet2fa: (data) => http.post('/api/accounts/bulk/set-2fa', data),
   bulkUpdateProfile: (data) => http.post('/api/accounts/bulk/update-profile', data),
   import: (formData) => http.post('/api/accounts/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
@@ -63,7 +64,8 @@ export const accountsApi = {
     }
   }),
   importSession: (data) => http.post('/api/accounts/import/session', data),
-  export: () => http.get('/api/accounts/export'),
+  export: (params) => http.get('/api/accounts/export', { params }),
+  checkSpamStatusSingle: (id) => http.post(`/api/accounts/check-spam-status-single/${id}`),
 }
 
 export const proxiesApi = {

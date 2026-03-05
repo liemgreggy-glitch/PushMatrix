@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from database.connection import get_db
 from models.account import Account
+from utils.phone_parser import get_country_from_phone, parse_2fa_from_json
 
 router = APIRouter(prefix="/api/accounts", tags=["账号管理"])
 
@@ -55,6 +56,10 @@ class BulkActionRequest(BaseModel):
 
 
 class BulkCheckSpamRequest(BaseModel):
+    account_ids: List[int]
+
+
+class BulkDeleteRequest(BaseModel):
     account_ids: List[int]
 
 
@@ -301,6 +306,86 @@ async def bulk_check_spam(data: BulkCheckSpamRequest, db: Session = Depends(get_
     return {"success": True, "checked": len(accounts), "message": "检查完成"}
 
 
+@router.post("/bulk/delete")
+async def bulk_delete(data: BulkDeleteRequest, db: Session = Depends(get_db)):
+    """批量删除账号"""
+    accounts = db.query(Account).filter(Account.id.in_(data.account_ids)).all()
+    if not accounts:
+        raise HTTPException(status_code=404, detail="未找到指定账号")
+    deleted = 0
+    for account in accounts:
+        db.delete(account)
+        deleted += 1
+    db.commit()
+    return {"success": True, "deleted": deleted, "message": f"已删除 {deleted} 个账号"}
+
+
+@router.post("/check-spam-status-single/{account_id}")
+async def check_spam_status_single(account_id: int, db: Session = Depends(get_db)):
+    """检查单个账号限制状态（通过 @SpamBot）"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="账号不存在")
+
+    if not account.session_string:
+        return {"success": False, "account_id": account_id, "phone": account.phone,
+                "status": "disconnected", "message": "账号无 session，跳过检查"}
+
+    try:
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+
+        api_id = account.api_id or int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
+        api_hash = account.api_hash or os.environ.get("TELEGRAM_API_HASH", "")
+
+        if not api_id or not api_hash:
+            return {"success": False, "account_id": account_id, "phone": account.phone,
+                    "status": "disconnected", "message": "账号缺少 API ID / API Hash，请在账号或系统设置中配置"}
+
+        client = TelegramClient(StringSession(account.session_string), api_id, api_hash)
+        await client.connect()
+
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            account.status = "disconnected"
+            db.commit()
+            return {"success": True, "account_id": account_id, "phone": account.phone,
+                    "status": "disconnected", "message": "账号未授权"}
+
+        await client.send_message("@SpamBot", "/start")
+
+        import asyncio
+        await asyncio.sleep(3)
+
+        messages = await client.get_messages("@SpamBot", limit=1)
+        reply_text = messages[0].text.lower() if messages else ""
+
+        await client.disconnect()
+
+        if any(k in reply_text for k in ("good news", "no limits", "no complaints")):
+            new_status = "unlimited"
+        elif any(k in reply_text for k in ("spam", "limited")):
+            new_status = "spam"
+        elif any(k in reply_text for k in ("frozen", "suspended")):
+            new_status = "frozen"
+        elif any(k in reply_text for k in ("banned", "deleted", "deactivated")):
+            new_status = "banned"
+        else:
+            new_status = "idle"
+
+        account.status = new_status
+        account.is_spam = new_status == "spam"
+        account.is_banned = new_status == "banned"
+        db.commit()
+
+        return {"success": True, "account_id": account_id, "phone": account.phone,
+                "status": new_status, "reply": reply_text[:200]}
+
+    except Exception as e:
+        return {"success": False, "account_id": account_id, "phone": account.phone,
+                "status": "disconnected", "message": str(e)}
+
+
 @router.post("/bulk/set-2fa")
 async def bulk_set_2fa(data: BulkSet2FARequest, db: Session = Depends(get_db)):
     """批量设置 2FA（占位实现）"""
@@ -451,9 +536,14 @@ def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
                 "message": "手机号已存在",
             }
 
+        country_name, country_flag, country_code = get_country_from_phone(phone)
+
         account = Account(
             phone=phone,
             session_string=session_content.hex() if session_content else None,
+            country=country_name,
+            country_flag=country_flag,
+            country_code=country_code,
         )
         db.add(account)
         db.commit()
@@ -480,6 +570,9 @@ def _create_account_from_config(config: dict, db: Session) -> dict:
         if existing:
             return {"phone": phone, "success": False, "message": "手机号已存在"}
 
+        country_name, country_flag, country_code = get_country_from_phone(phone)
+        two_fa_value = parse_2fa_from_json(config)
+
         account = Account(
             phone=phone,
             username=config.get("username"),
@@ -487,6 +580,11 @@ def _create_account_from_config(config: dict, db: Session) -> dict:
             last_name=config.get("last_name"),
             api_id=config.get("api_id"),
             api_hash=config.get("api_hash"),
+            country=country_name,
+            country_flag=country_flag,
+            country_code=country_code,
+            two_fa=two_fa_value,
+            two_fa_enabled=bool(two_fa_value),
         )
         db.add(account)
         db.commit()

@@ -36,9 +36,12 @@ class Account(Base):
     api_id = Column(Integer)
     api_hash = Column(String(100))
     two_fa_enabled = Column(Boolean, default=False)
+    two_fa = Column(String(255))
     health_score = Column(Integer, default=0)
     country = Column(String(50))
     country_flag = Column(String(10))
+    country_code = Column(String(10))
+    telegram_id = Column(String(20))
     registered_months = Column(Integer)
     tags = Column(Text)  # JSON string for SQLite compatibility
     remark = Column(Text)
@@ -62,13 +65,15 @@ class Account(Base):
             "is_banned": self.is_banned,
             # two_fa / two_fa_enabled: both included for frontend compatibility
             "two_fa_enabled": self.two_fa_enabled,
-            "two_fa": self.two_fa_enabled,
+            "two_fa": self.two_fa,
             "proxy_id": self.proxy_id,
             "group_id": self.group_id,
             # country / country_name: both included for frontend compatibility
             "country": self.country,
             "country_name": self.country,
             "country_flag": self.country_flag,
+            "country_code": self.country_code,
+            "telegram_id": self.telegram_id,
             "registered_months": self.registered_months,
             "health_score": self.health_score,
             "tags": json.loads(self.tags) if self.tags else [],

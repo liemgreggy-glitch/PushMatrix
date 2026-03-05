@@ -3,10 +3,8 @@
     <div class="page-header">
       <span class="page-title">账号列表</span>
       <div class="header-actions">
-        <el-button type="primary" icon="Refresh" @click="handleBatchCheck" :loading="checking">
-          批量检查
-        </el-button>
-        <el-button icon="Clock" @click="showScheduleDialog = true">定时检查</el-button>
+        <el-button icon="Upload" @click="$router.push('/accounts/import')">导入账号</el-button>
+        <el-button icon="Download" @click="handleExport">导出账号</el-button>
       </div>
     </div>
 
@@ -30,8 +28,7 @@
         <el-button size="small" @click="handleCancelSelect" icon="Close">取消选中</el-button>
         <el-divider direction="vertical" />
         <el-button size="small" @click="handleRefresh" icon="Refresh">刷新</el-button>
-        <el-button size="small" icon="Plus" @click="showAddDialog = true">添加</el-button>
-        <el-button size="small" icon="Upload" @click="$router.push('/accounts/import')">导入</el-button>
+        <el-button size="small" type="danger" icon="Delete" @click="handleBatchDelete">删除</el-button>
       </div>
     </div>
 
@@ -96,57 +93,12 @@
 
       <ActionMenu :selected-accounts="selectedAccounts" @action="handleAction" />
     </div>
-
-    <!-- Add Account Dialog -->
-    <el-dialog v-model="showAddDialog" title="添加账号" width="480px">
-      <el-form :model="newAccount" label-width="100px">
-        <el-form-item label="手机号" required>
-          <el-input v-model="newAccount.phone" placeholder="+1234567890" />
-        </el-form-item>
-        <el-form-item label="Session">
-          <el-input v-model="newAccount.session_string" type="textarea" :rows="3" placeholder="Session 字符串（可选）" />
-        </el-form-item>
-        <el-form-item label="API ID">
-          <el-input v-model="newAccount.api_id" placeholder="Telegram API ID" />
-        </el-form-item>
-        <el-form-item label="API Hash">
-          <el-input v-model="newAccount.api_hash" placeholder="Telegram API Hash" />
-        </el-form-item>
-        <el-form-item label="代理">
-          <el-select v-model="newAccount.proxy_id" clearable placeholder="选择代理（可选）" style="width: 100%;">
-            <el-option label="无代理" :value="null" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showAddDialog = false">取消</el-button>
-        <el-button type="primary" @click="submitAccount">添加</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Schedule Dialog -->
-    <el-dialog v-model="showScheduleDialog" title="设置定时检查" width="400px">
-      <el-form label-width="100px">
-        <el-form-item label="检查频率">
-          <el-select v-model="scheduleForm.cron" style="width: 100%;">
-            <el-option label="每天 09:00" value="0 9 * * *" />
-            <el-option label="每天 21:00" value="0 21 * * *" />
-            <el-option label="每6小时" value="0 */6 * * *" />
-            <el-option label="每12小时" value="0 */12 * * *" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showScheduleDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveSchedule">保存</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import StatCard from '../../components/StatCard.vue'
 import ActionMenu from '../../components/ActionMenu.vue'
 import { accountsApi } from '../../api/index.js'
@@ -154,12 +106,7 @@ import { accountsApi } from '../../api/index.js'
 const tableRef = ref(null)
 const accounts = ref([])
 const loading = ref(false)
-const checking = ref(false)
 const selectedAccounts = ref([])
-const showAddDialog = ref(false)
-const showScheduleDialog = ref(false)
-const scheduleForm = ref({ cron: '0 9 * * *' })
-const newAccount = ref({ phone: '', session_string: '', api_id: null, api_hash: '', proxy_id: null })
 
 const stats = ref([
   { key: 'total', value: 0, label: '账号总数', color: '#10b981' },
@@ -202,7 +149,6 @@ function handleSelectionChange(selection) {
 }
 
 function handleSelectChecked() {
-  // 保持当前选中状态
   const checkedCount = selectedAccounts.value.length
   if (checkedCount === 0) {
     ElMessage.info('当前没有已选中的账号')
@@ -216,10 +162,8 @@ function handleSelectAll() {
 }
 
 function handleSelectUnchecked() {
-  // 反选：选中所有未勾选的行，取消选中已勾选的行
   const currentSelectedIds = new Set(selectedAccounts.value.map(acc => acc.id))
   tableRef.value?.clearSelection()
-  
   nextTick(() => {
     accounts.value.forEach(acc => {
       if (!currentSelectedIds.has(acc.id)) {
@@ -237,35 +181,129 @@ async function handleRefresh() {
   await loadAccounts()
 }
 
-async function handleBatchCheck() {
-  if (!selectedAccounts.value.length) {
-    ElMessage.warning('请先选择需要检查的账号')
-    return
-  }
-  checking.value = true
+async function handleExport() {
   try {
-    const ids = selectedAccounts.value.map(a => a.id)
-    await accountsApi.bulkCheckSpam({ account_ids: ids })
-    ElMessage.success('批量检查已完成')
-    await loadAccounts()
+    const data = await accountsApi.export({ format: 'json' })
+    const blob = new Blob([JSON.stringify(data.data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `accounts_export_${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success(`已导出 ${data.count} 个账号`)
   } catch (err) {
-    ElMessage.error('检查失败')
-  } finally {
-    checking.value = false
+    ElMessage.error('导出失败: ' + err.message)
   }
 }
 
-async function handleAction(command, accounts) {
-  const ids = accounts.map(a => a.id)
+async function handleBatchDelete() {
+  if (!selectedAccounts.value.length) {
+    ElMessage.warning('请先选择需要删除的账号')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${selectedAccounts.value.length} 个账号吗？此操作不可撤销。`,
+      '批量删除确认',
+      { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' }
+    )
+    const ids = selectedAccounts.value.map(a => a.id)
+    const result = await accountsApi.bulkDelete({ account_ids: ids })
+    ElMessage.success(`已删除 ${result.deleted} 个账号`)
+    await loadAccounts()
+  } catch (err) {
+    if (err !== 'cancel') {
+      ElMessage.error('删除失败: ' + err.message)
+    }
+  }
+}
+
+// Simple concurrency limiter using native Promises
+function createConcurrencyLimit(concurrency) {
+  let active = 0
+  const queue = []
+  function run() {
+    if (active >= concurrency || queue.length === 0) return
+    active++
+    const { fn, resolve, reject } = queue.shift()
+    fn().then(resolve, reject).finally(() => {
+      active--
+      run()
+    })
+  }
+  return (fn) => new Promise((resolve, reject) => {
+    queue.push({ fn, resolve, reject })
+    run()
+  })
+}
+
+async function handleBatchCheckSpam(accountsToCheck) {
+  const concurrency = parseInt(localStorage.getItem('check_concurrency') || '100', 10)
+  const delay = parseInt(localStorage.getItem('check_delay_ms') || '500', 10)
+  const total = accountsToCheck.length
+
+  console.log(`📋 [检查限制] 开始检查 ${total} 个账号，并发数: ${concurrency}`)
+
+  const statusCounts = { unlimited: 0, spam: 0, frozen: 0, banned: 0, disconnected: 0, idle: 0 }
+  const limit = createConcurrencyLimit(concurrency)
+  let completed = 0
+
+  const STATUS_LABELS = {
+    unlimited: '✅ 无限制',
+    spam: '⚠️ 垃圾邮件限制',
+    frozen: '❄️ 冻结',
+    banned: '🚫 封禁',
+    disconnected: '🔌 未连接',
+    idle: '⏸️ 未工作',
+  }
+
+  const tasks = accountsToCheck.map(account =>
+    limit(async () => {
+      if (delay > 0) {
+        await new Promise(r => setTimeout(r, delay))
+      }
+      try {
+        const result = await accountsApi.checkSpamStatusSingle(account.id)
+        completed++
+        const status = result.status || 'idle'
+        statusCounts[status] = (statusCounts[status] || 0) + 1
+        const label = STATUS_LABELS[status] || status
+        console.log(`${label.split(' ')[0]} [检查限制] [${completed}/${total}] ${account.phone} → ${label}`)
+        return result
+      } catch (err) {
+        completed++
+        statusCounts.disconnected = (statusCounts.disconnected || 0) + 1
+        console.log(`❌ [检查限制] [${completed}/${total}] ${account.phone} → 错误: ${err.message}`)
+        return { status: 'disconnected' }
+      }
+    })
+  )
+
+  await Promise.all(tasks)
+
+  console.log('📋 [检查限制] =======================================')
+  console.log('✅ [检查限制] 检查完成！统计结果：')
+  if (statusCounts.unlimited) console.log(`📋 [检查限制] ✅ 无限制: ${statusCounts.unlimited} 个`)
+  if (statusCounts.spam) console.log(`📋 [检查限制] ⚠️ 垃圾邮件限制: ${statusCounts.spam} 个`)
+  if (statusCounts.frozen) console.log(`📋 [检查限制] ❄️ 冻结: ${statusCounts.frozen} 个`)
+  if (statusCounts.banned) console.log(`📋 [检查限制] 🚫 封禁: ${statusCounts.banned} 个`)
+  if (statusCounts.disconnected) console.log(`📋 [检查限制] 🔌 未连接/错误: ${statusCounts.disconnected} 个`)
+  console.log('📋 [检查限制] =======================================')
+
+  await loadAccounts()
+}
+
+async function handleAction(command, actionAccounts) {
+  const ids = actionAccounts.map(a => a.id)
   try {
     if (command === 'check-spam') {
-      await accountsApi.bulkCheckSpam({ account_ids: ids })
-      ElMessage.success('垃圾邮件检查已完成')
+      await handleBatchCheckSpam(actionAccounts)
     } else {
       await accountsApi.bulkAction({ action_type: command, account_ids: ids })
-      ElMessage.success(`操作已执行`)
+      ElMessage.success('操作已执行')
+      await loadAccounts()
     }
-    await loadAccounts()
   } catch (err) {
     ElMessage.error('操作失败')
   }
@@ -289,23 +327,6 @@ async function loadAccounts() {
   } finally {
     loading.value = false
   }
-}
-
-async function submitAccount() {
-  try {
-    await accountsApi.create(newAccount.value)
-    ElMessage.success('账号已添加')
-    showAddDialog.value = false
-    loadAccounts()
-  } catch (err) {
-    ElMessage.error('添加失败: ' + err.message)
-  }
-}
-
-async function saveSchedule() {
-  // TODO: 实现定时检查的实际保存逻辑
-  ElMessage.success('定时检查已设置')
-  showScheduleDialog.value = false
 }
 
 onMounted(loadAccounts)

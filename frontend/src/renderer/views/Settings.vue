@@ -103,6 +103,25 @@
           </el-form>
         </el-card>
       </el-tab-pane>
+
+      <!-- Concurrency Settings -->
+      <el-tab-pane label="并发设置" name="concurrency">
+        <el-card class="settings-card">
+          <el-form label-width="160px">
+            <el-form-item label="并发线程数">
+              <el-input-number v-model="concurrencySettings.concurrency" :min="1" :max="500" />
+              <span class="form-hint">同时检查的账号数量（1-500，默认 100）</span>
+            </el-form-item>
+            <el-form-item label="请求延迟(ms)">
+              <el-input-number v-model="concurrencySettings.delayMs" :min="0" :max="5000" :step="100" />
+              <span class="form-hint">每次检查前的等待时间（0-5000ms，默认 500ms）</span>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="saveConcurrencySettings">保存并发设置</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- Restore Dialog -->
@@ -127,6 +146,11 @@ const testing = ref(false)
 const connectionStatus = ref('')
 const showRestoreDialog = ref(false)
 const restoreFile = ref('')
+
+const concurrencySettings = ref({
+  concurrency: parseInt(localStorage.getItem('check_concurrency') || '100', 10),
+  delayMs: parseInt(localStorage.getItem('check_delay_ms') || '500', 10),
+})
 
 const settings = ref({
   telegram: { api_id: null, api_hash: '' },
@@ -202,6 +226,12 @@ async function clearLogs() {
   } catch (err) {
     ElMessage.error('清理失败')
   }
+}
+
+function saveConcurrencySettings() {
+  localStorage.setItem('check_concurrency', String(concurrencySettings.value.concurrency))
+  localStorage.setItem('check_delay_ms', String(concurrencySettings.value.delayMs))
+  ElMessage.success('并发设置已保存')
 }
 
 onMounted(loadSettings)
