@@ -421,11 +421,12 @@ async function loadAccounts() {
     if (isElectron.value) {
       // Electron: read account list directly from local session files
       const localAccounts = await window.electron.ipcRenderer.invoke('scan-local-accounts')
-      accounts.value = localAccounts
+      const safeAccounts = Array.isArray(localAccounts) ? localAccounts : []
+      accounts.value = safeAccounts
       // Recalculate statistics
       const s = { total: 0, idle: 0, unlimited: 0, spam: 0, frozen: 0, banned: 0, disconnected: 0 }
-      s.total = localAccounts.length
-      for (const acc of localAccounts) {
+      s.total = safeAccounts.length
+      for (const acc of safeAccounts) {
         const rs = acc.restriction_status
         if (rs === 'UNRESTRICTED') s.unlimited++
         else if (rs === 'SPAM' || rs === 'SPAM_PERMANENT' || rs === 'SPAM_TEMP') s.spam++
