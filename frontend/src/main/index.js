@@ -179,3 +179,31 @@ ipcMain.handle('open-sessions-folder', async () => {
 ipcMain.handle('get-sessions-dir', () => {
   return sessionManager.getBaseDir()
 })
+
+// Scan local sessions directory and return account list
+ipcMain.handle('scan-local-accounts', async () => {
+  return await sessionManager.scanAllAccounts()
+})
+
+// Pure local file import (no backend involved)
+ipcMain.handle('import-files-locally', async (_event, { fileList }) => {
+  return await sessionManager.importFilesLocally(fileList)
+})
+
+// Start watching sessions folder for file-system changes
+ipcMain.handle('watch-sessions', (_event) => {
+  sessionManager.watchSessions(() => {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('sessions-changed')
+      }
+    })
+  })
+  return { success: true }
+})
+
+// Stop watching sessions folder
+ipcMain.handle('unwatch-sessions', () => {
+  sessionManager.unwatchSessions()
+  return { success: true }
+})
