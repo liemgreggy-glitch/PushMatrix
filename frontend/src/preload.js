@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld('electron', {
         'delete-session',
         'open-sessions-folder',
         'get-sessions-dir',
+        'import-files-locally',
+        'scan-local-accounts',
+        'watch-sessions',
+        'unwatch-sessions',
       ]
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, ...args)

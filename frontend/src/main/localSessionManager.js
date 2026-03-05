@@ -9,13 +9,17 @@ const fsp = require('fs/promises')
  * objects ({ type: 'Buffer', data: [...] }).
  */
 function toBuffer(val) {
-  if (!val) return null
+  if (val === null || val === undefined) return null
   if (Buffer.isBuffer(val)) return val
   if (val instanceof ArrayBuffer) return Buffer.from(val)
   if (val instanceof Uint8Array) return Buffer.from(val)
   // IPC passes Buffers as { type: 'Buffer', data: [...] }
   if (typeof val === 'object' && val.type === 'Buffer' && Array.isArray(val.data)) {
     return Buffer.from(val.data)
+  }
+  // Plain JS Array (e.g. Array.from(new Uint8Array(...)) from the renderer)
+  if (Array.isArray(val)) {
+    return Buffer.from(val)
   }
   // Plain object with numeric keys (e.g. structured-clone of ArrayBuffer)
   if (typeof val === 'object') {
@@ -378,7 +382,7 @@ class LocalSessionManager {
       const jf = jsonFiles.find(f => f.name === `${phone}.json`)
       try {
         const sessionBuf = toBuffer(sf.buffer)
-        if (!sessionBuf) throw new Error('无法转换 session 文件内容为 Buffer')
+        if (!sessionBuf || sessionBuf.length === 0) throw new Error('无法转换 session 文件内容为 Buffer')
         await fsp.writeFile(path.join(targetFolder, sf.name), sessionBuf)
         let config = {}
         if (jf) {
