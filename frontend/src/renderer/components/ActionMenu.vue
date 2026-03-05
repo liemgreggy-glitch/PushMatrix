@@ -5,7 +5,7 @@
     </el-button>
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item command="check-spam">检查账户是否已拦截垃圾邮件</el-dropdown-item>
+        <el-dropdown-item command="check-spam">检查账号限制</el-dropdown-item>
         <el-dropdown-item command="open-web">在网页上打开</el-dropdown-item>
         <el-dropdown-item command="2fa" divided>更改双重验证...</el-dropdown-item>
         <el-dropdown-item command="role-swap">角色互换...</el-dropdown-item>
