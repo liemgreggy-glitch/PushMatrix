@@ -440,8 +440,16 @@ async function loadAccounts() {
     } else {
       // Non-Electron: use server API
       const data = await accountsApi.getList()
-      accounts.value = data.items || data.accounts || (Array.isArray(data) ? data : [])
-      const s = data.stats
+      // Guard: ensure accounts is always an array even when data is undefined
+      const list = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.accounts)
+          ? data.accounts
+          : Array.isArray(data)
+            ? data
+            : []
+      accounts.value = list
+      const s = data?.stats
       if (s) {
         stats.value.forEach(stat => {
           if (stat.key in s) stat.value = s[stat.key]
@@ -449,7 +457,8 @@ async function loadAccounts() {
       }
     }
   } catch (err) {
-    ElMessage.error('加载账号列表失败: ' + err.message)
+    accounts.value = []   // ensure accounts is always an array on error
+    ElMessage.error('加载账号列表失败: ' + (err.message || '未知错误'))
   } finally {
     loading.value = false
   }
