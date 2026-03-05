@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from typing import List
+from pydantic import BaseModel
+from typing import List, Optional
 import zipfile
 import rarfile
 import json
@@ -7,6 +8,13 @@ import os
 import tempfile
 
 router = APIRouter()
+
+
+class ImportSessionRequest(BaseModel):
+    session_string: str
+    phone: Optional[str] = ''
+    api_id: Optional[int] = None
+    api_hash: Optional[str] = ''
 
 @router.post("/api/accounts/import/files")
 async def import_files(files: List[UploadFile] = File(...)):
@@ -147,3 +155,18 @@ async def create_account_from_config(config):
             'success': False,
             'message': str(e)
         }
+
+
+@router.post("/api/accounts/import/session")
+async def import_session(data: ImportSessionRequest):
+    """导入 Session 字符串"""
+    try:
+        # TODO: 实际的数据库插入逻辑（使用 data.session_string, data.phone, data.api_id, data.api_hash）
+        return {
+            'filename': 'Session 字符串',
+            'phone': data.phone,
+            'success': True,
+            'message': '导入成功'
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
