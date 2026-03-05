@@ -1,4 +1,5 @@
 import axios from 'axios'
+import logger from '../utils/logger.js'
 
 const BASE_URL = 'http://45.77.121.38:8000'
 
@@ -10,11 +11,31 @@ const http = axios.create({
   },
 })
 
+// 请求拦截器
+http.interceptors.request.use(
+  config => {
+    logger.info(`📤 API 请求: ${config.method?.toUpperCase()} ${config.url}`)
+    return config
+  },
+  err => {
+    logger.error('❌ API 请求错误', err.message)
+    return Promise.reject(err)
+  }
+)
+
+// 响应拦截器
 http.interceptors.response.use(
-  res => res.data,
+  res => {
+    logger.success(`✅ API 响应: ${res.config.url}`)
+    return res.data
+  },
   err => {
     const message = err.response?.data?.detail || err.message || '请求失败'
-    console.error('API Error:', message)
+    logger.error(`❌ API 错误: ${message}`, {
+      url: err.config?.url,
+      status: err.response?.status,
+      data: err.response?.data
+    })
     return Promise.reject(new Error(message))
   }
 )
