@@ -465,22 +465,119 @@ async def check_spam_status_single(account_id: int, db: Session = Depends(get_db
 @router.post("/{account_id}/check-restriction")
 async def check_restriction_status(account_id: int, db: Session = Depends(get_db)):
     """检查单个账号的限制状态（通过 @SpamBot），结果存入专用字段"""
-    # Keywords from @SpamBot replies (may need updating if SpamBot changes its messages)
-    _UNRESTRICTED_KW = ("good news", "no limits", "no complaints", "not limited", "seems fine")
-    _SPAM_KW = ("spam", "limited", "restricted", "unfortunately")
-    _FROZEN_KW = ("frozen", "suspended", "temporarily")
-    _BANNED_KW = ("banned", "deleted", "deactivated", "permanently")
+    import re as _re
 
-    # Mapping from restriction_status to legacy `status` column values used elsewhere in the app
+    # ── 无限制 ──────────────────────────────────────────────
+    _UNRESTRICTED_KW = (
+        # 英文
+        "good news", "no limits", "no complaints", "not limited", "seems fine",
+        "you're free", "no restrictions",
+        # 俄语
+        "хороших новостей", "без ограничений", "нет ограничений",
+        "жалоб нет", "ограничений нет",
+    )
+
+    # ── 垃圾邮件 / 限制（需进一步区分永久/临时）────────────
+    _SPAM_KW = (
+        # 英文
+        "spam", "limited", "restricted", "unfortunately",
+        "can't send messages", "cannot send",
+        # 俄语
+        "спам", "ограничен", "ограничения", "к сожалению",
+        "рассылк", "не можете отправлять",
+    )
+
+    # ── 冻结 ────────────────────────────────────────────────
+    _FROZEN_KW = (
+        # 英文
+        "frozen", "suspended", "temporarily unavailable",
+        # 俄语
+        "заморожен", "приостановлен", "временно недоступен",
+    )
+
+    # ── 封禁 ────────────────────────────────────────────────
+    _BANNED_KW = (
+        # 英文
+        "banned", "deleted", "deactivated", "permanently",
+        "no longer valid",
+        # 俄语
+        "заблокирован", "удалён", "деактивирован", "навсегда",
+        "постоянно",
+    )
+
+    # ── 状态 → status 字段映射 ──────────────────────────────
     _STATUS_MAP = {
-        "UNRESTRICTED": "unlimited",
-        "SPAM": "spam",
-        "FROZEN": "frozen",
-        "BANNED": "banned",
-        "UNAUTHORIZED": "disconnected",
-        "ERROR": "disconnected",
-        "UNKNOWN": "disconnected",
+        "UNRESTRICTED":   "unlimited",
+        "SPAM_PERMANENT": "spam",
+        "SPAM_TEMP":      "spam",
+        "FROZEN":         "frozen",
+        "BANNED":         "banned",
+        "UNAUTHORIZED":   "disconnected",
+        "ERROR":          "disconnected",
+        "UNKNOWN_ERROR":  "disconnected",
     }
+
+    def _extract_spam_until(text: str):
+        """
+        从 SpamBot 原始回复中提取临时限制解禁时间。
+        支持英文格式：until DD Mon YYYY / until Mon DD, YYYY
+        支持俄语格式：до DD.MM.YYYY / до DD месяц YYYY
+        返回 datetime 对象（UTC），若未找到则返回 None（说明是永久限制）。
+        """
+        from datetime import timezone as _tz
+
+        _MONTHS_EN = {
+            'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
+            'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12,
+            'january':1,'february':2,'march':3,'april':4,'june':6,
+            'july':7,'august':8,'september':9,'october':10,'november':11,'december':12,
+        }
+        _MONTHS_RU = {
+            'января':1,'февраля':2,'марта':3,'апреля':4,'мая':5,'июня':6,
+            'июля':7,'августа':8,'сентября':9,'октября':10,'ноября':11,'декабря':12,
+        }
+
+        text_lower = text.lower()
+
+        # 英文：until 15 March 2025
+        m = _re.search(r'until\s+(\d{1,2})\s+(\w+)\s+(\d{4})', text_lower)
+        if m:
+            try:
+                month = _MONTHS_EN.get(m.group(2)[:3])
+                if month:
+                    return datetime(int(m.group(3)), month, int(m.group(1)), tzinfo=_tz.utc)
+            except Exception:
+                pass
+
+        # 英文：until March 15, 2025
+        m = _re.search(r'until\s+(\w+)\s+(\d{1,2}),?\s+(\d{4})', text_lower)
+        if m:
+            try:
+                month = _MONTHS_EN.get(m.group(1)[:3])
+                if month:
+                    return datetime(int(m.group(3)), month, int(m.group(2)), tzinfo=_tz.utc)
+            except Exception:
+                pass
+
+        # 俄语：до 15.03.2025
+        m = _re.search(r'до\s+(\d{1,2})\.(\d{1,2})\.(\d{4})', text_lower)
+        if m:
+            try:
+                return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), tzinfo=_tz.utc)
+            except Exception:
+                pass
+
+        # 俄语：до 15 марта 2025
+        m = _re.search(r'до\s+(\d{1,2})\s+(\w+)\s+(\d{4})', text_lower)
+        if m:
+            try:
+                month = _MONTHS_RU.get(m.group(2))
+                if month:
+                    return datetime(int(m.group(3)), month, int(m.group(1)), tzinfo=_tz.utc)
+            except Exception:
+                pass
+
+        return None
 
     _RAW_REPLY_DB_MAX = 500  # Max chars stored in DB
     _RAW_REPLY_API_MAX = 500  # Max chars returned in API response (same as DB)
@@ -495,8 +592,8 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         return {
             "account_id": account_id,
             "phone": account.phone,
-            "restriction_status": "UNKNOWN",
-            "status_text": "❓ 未知/错误",
+            "restriction_status": "UNKNOWN_ERROR",
+            "status_text": "❓ 未知错误",
             "raw_reply": "缺少 session_string",
             "checked_at": datetime.utcnow().isoformat(),
             "error": "无法检查：缺少有效的 session",
@@ -508,8 +605,8 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         return {
             "account_id": account_id,
             "phone": account.phone,
-            "restriction_status": "UNKNOWN",
-            "status_text": "❓ 未知/错误",
+            "restriction_status": "UNKNOWN_ERROR",
+            "status_text": "❓ 未知错误",
             "raw_reply": "缺少 API ID / API Hash",
             "checked_at": datetime.utcnow().isoformat(),
             "error": "账号缺少 API ID / API Hash，请在账号或系统设置中配置（或设置环境变量 TELEGRAM_API_ID / TELEGRAM_API_HASH）",
@@ -543,15 +640,15 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
 
         if not client.is_connected():
             _log_plain(f"{phone} → 错误: 连接失败")
-            account.restriction_status = "UNKNOWN"
+            account.restriction_status = "UNKNOWN_ERROR"
             account.restriction_raw_reply = "无法连接到 Telegram"
             account.restriction_checked_at = datetime.utcnow()
             db.commit()
             return {
                 "account_id": account_id,
                 "phone": phone,
-                "restriction_status": "UNKNOWN",
-                "status_text": "❓ 未知/错误",
+                "restriction_status": "UNKNOWN_ERROR",
+                "status_text": "❓ 未知错误",
                 "raw_reply": "无法连接到 Telegram",
                 "checked_at": account.restriction_checked_at.isoformat(),
                 "error": "连接失败",
@@ -563,15 +660,16 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         _log_plain(f"{phone} → 授权检查")
         if not await client.is_user_authorized():
             _log_plain(f"{phone} → 未授权/未登录")
-            account.restriction_status = "UNAUTHORIZED"
+            account.restriction_status = "BANNED"
             account.restriction_raw_reply = "账号未授权或 session 已失效"
             account.restriction_checked_at = datetime.utcnow()
+            account.is_banned = True
             db.commit()
             return {
                 "account_id": account_id,
                 "phone": phone,
-                "restriction_status": "UNAUTHORIZED",
-                "status_text": "❌ 未登录/未授权",
+                "restriction_status": "BANNED",
+                "status_text": "🚫 封禁",
                 "raw_reply": "账号未授权或 session 已失效",
                 "checked_at": account.restriction_checked_at.isoformat(),
             }
@@ -591,31 +689,39 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
 
             raw_reply_lower = raw_reply.lower()
 
-            # 步骤 5: 解析状态
+            # 步骤 5: 解析状态（支持英文 + 俄语，6种状态）
+            spam_until = None
             if any(k in raw_reply_lower for k in _UNRESTRICTED_KW):
                 restriction_status = "UNRESTRICTED"
                 status_text = "✅ 无限制"
-            elif any(k in raw_reply_lower for k in _SPAM_KW):
-                restriction_status = "SPAM"
-                status_text = "⚠️ 垃圾邮件"
             elif any(k in raw_reply_lower for k in _FROZEN_KW):
                 restriction_status = "FROZEN"
                 status_text = "❄️ 冻结"
             elif any(k in raw_reply_lower for k in _BANNED_KW):
                 restriction_status = "BANNED"
                 status_text = "🚫 封禁"
+            elif any(k in raw_reply_lower for k in _SPAM_KW):
+                # 尝试提取解禁时间，区分永久/临时
+                spam_until = _extract_spam_until(raw_reply)
+                if spam_until:
+                    restriction_status = "SPAM_TEMP"
+                    status_text = f"⏳ 临时限制 (至 {spam_until.strftime('%Y-%m-%d')})"
+                else:
+                    restriction_status = "SPAM_PERMANENT"
+                    status_text = "⚠️ 永久垃圾邮件"
             else:
-                restriction_status = "UNKNOWN"
-                status_text = "❓ 未知/错误"
+                restriction_status = "UNKNOWN_ERROR"
+                status_text = "❓ 未知错误"
 
             _log_plain(f"{phone} → 解析状态: {restriction_status}")
 
             # 步骤 6: 更新数据库
             account.restriction_status = restriction_status
+            account.spam_until = spam_until
             account.restriction_raw_reply = raw_reply[:_RAW_REPLY_DB_MAX]
             account.restriction_checked_at = datetime.utcnow()
             account.status = _STATUS_MAP.get(restriction_status, "disconnected")
-            account.is_spam = restriction_status == "SPAM"
+            account.is_spam = restriction_status in ("SPAM_PERMANENT", "SPAM_TEMP")
             account.is_banned = restriction_status == "BANNED"
             db.commit()
 
@@ -630,15 +736,15 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
 
         except FloodWaitError as e:
             _log_plain(f"{phone} → 错误: Telegram 限流，需等待 {e.seconds} 秒")
-            account.restriction_status = "UNKNOWN"
+            account.restriction_status = "UNKNOWN_ERROR"
             account.restriction_raw_reply = f"Telegram 限流，需等待 {e.seconds} 秒"
             account.restriction_checked_at = datetime.utcnow()
             db.commit()
             return {
                 "account_id": account_id,
                 "phone": phone,
-                "restriction_status": "UNKNOWN",
-                "status_text": "❓ 未知/错误",
+                "restriction_status": "UNKNOWN_ERROR",
+                "status_text": "❓ 未知错误",
                 "raw_reply": f"Telegram 限流，需等待 {e.seconds} 秒",
                 "checked_at": account.restriction_checked_at.isoformat(),
                 "error": f"flood_wait_{e.seconds}",
@@ -679,15 +785,16 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
 
     except AuthKeyUnregisteredError:
         _log_plain(f"{phone} → 错误: Session 已失效")
-        account.restriction_status = "UNAUTHORIZED"
+        account.restriction_status = "BANNED"
         account.restriction_raw_reply = "Session 已失效，需重新登录"
         account.restriction_checked_at = datetime.utcnow()
+        account.is_banned = True
         db.commit()
         return {
             "account_id": account_id,
             "phone": phone,
-            "restriction_status": "UNAUTHORIZED",
-            "status_text": "❌ 未登录/未授权",
+            "restriction_status": "BANNED",
+            "status_text": "🚫 封禁",
             "raw_reply": "Session 已失效，需重新登录",
             "checked_at": account.restriction_checked_at.isoformat(),
         }

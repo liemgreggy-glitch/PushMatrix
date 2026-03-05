@@ -45,7 +45,8 @@ class Account(Base):
     registered_months = Column(Integer)
     tags = Column(Text)  # JSON string for SQLite compatibility
     remark = Column(Text)
-    restriction_status = Column(String(20), nullable=True)  # UNRESTRICTED/SPAM/FROZEN/BANNED/UNKNOWN
+    restriction_status = Column(String(30), nullable=True)  # UNRESTRICTED/SPAM_PERMANENT/SPAM_TEMP/FROZEN/BANNED/UNKNOWN_ERROR
+    spam_until = Column(DateTime(timezone=True), nullable=True)  # 临时限制解禁时间
     restriction_raw_reply = Column(Text, nullable=True)     # SpamBot 原始回复
     restriction_checked_at = Column(DateTime(timezone=True), nullable=True)  # 最后检查时间
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -82,6 +83,7 @@ class Account(Base):
             "tags": json.loads(self.tags) if self.tags else [],
             "remark": self.remark,
             "restriction_status": self.restriction_status,
+            "spam_until": self.spam_until.isoformat() if self.spam_until else None,
             "restriction_raw_reply": self.restriction_raw_reply,
             "restriction_checked_at": self.restriction_checked_at.isoformat() if self.restriction_checked_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,

@@ -55,14 +55,19 @@
           <span>{{ row.country_flag }} {{ row.country_name }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="120">
+      <el-table-column label="状态" width="160">
         <template #default="{ row }">
-          <el-tag
-            size="small"
-            :style="{ backgroundColor: getStatusColor(row.status) + '22', color: getStatusColor(row.status), borderColor: getStatusColor(row.status) + '44' }"
-          >
-            {{ getStatusText(row.status) }}
-          </el-tag>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <el-tag
+              size="small"
+              :style="{ backgroundColor: getStatusColor(row.restriction_status || row.status) + '22', color: getStatusColor(row.restriction_status || row.status), borderColor: getStatusColor(row.restriction_status || row.status) + '44' }"
+            >
+              {{ getStatusText(row.restriction_status || row.status) }}
+            </el-tag>
+            <span v-if="row.restriction_status === 'SPAM_TEMP' && row.spam_until" style="font-size: 11px; color: #f97316;">
+              至 {{ new Date(row.spam_until).toLocaleDateString('zh-CN') }}
+            </span>
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="注册时间" width="120">
@@ -130,22 +135,30 @@ const isElectron = computed(() => {
 })
 
 const stats = ref([
-  { key: 'total', value: 0, label: '账号总数', color: '#10b981' },
-  { key: 'idle', value: 0, label: '未工作', color: '#6b7280' },
-  { key: 'unlimited', value: 0, label: '无限制', color: '#3b82f6' },
-  { key: 'spam', value: 0, label: '垃圾邮件', color: '#ef4444' },
-  { key: 'frozen', value: 0, label: '冻结', color: '#f59e0b' },
-  { key: 'banned', value: 0, label: '封禁', color: '#dc2626' },
-  { key: 'disconnected', value: 0, label: '未连接', color: '#eab308' },
+  { key: 'total',        value: 0, label: '账号总数',     color: '#10b981' },
+  { key: 'idle',         value: 0, label: '未工作',       color: '#6b7280' },
+  { key: 'unlimited',    value: 0, label: '无限制',       color: '#3b82f6' },
+  { key: 'spam',         value: 0, label: '垃圾邮件',     color: '#ef4444' },
+  { key: 'frozen',       value: 0, label: '冻结',         color: '#f59e0b' },
+  { key: 'banned',       value: 0, label: '封禁',         color: '#dc2626' },
+  { key: 'disconnected', value: 0, label: '未连接',       color: '#eab308' },
 ])
 
 const STATUS_CONFIG = {
-  unlimited: { text: '无限制', color: '#10b981' },
-  spam: { text: '垃圾邮件', color: '#ef4444' },
-  frozen: { text: '冻结', color: '#f59e0b' },
-  banned: { text: '封禁', color: '#dc2626' },
-  disconnected: { text: '未连接', color: '#eab308' },
-  idle: { text: '未工作', color: '#6b7280' },
+  // 旧 status 字段值（兼容）
+  unlimited:    { text: '无限制',       color: '#10b981' },
+  frozen:       { text: '冻结',         color: '#f59e0b' },
+  banned:       { text: '封禁',         color: '#dc2626' },
+  disconnected: { text: '未连接',       color: '#eab308' },
+  idle:         { text: '未工作',       color: '#6b7280' },
+  spam:         { text: '垃圾邮件',     color: '#ef4444' },
+  // 新 restriction_status 字段值
+  UNRESTRICTED:   { text: '✅ 无限制',         color: '#10b981' },
+  SPAM_PERMANENT: { text: '⚠️ 永久垃圾邮件',   color: '#ef4444' },
+  SPAM_TEMP:      { text: '⏳ 临时限制',        color: '#f97316' },
+  FROZEN:         { text: '❄️ 冻结',           color: '#f59e0b' },
+  BANNED:         { text: '🚫 封禁',           color: '#dc2626' },
+  UNKNOWN_ERROR:  { text: '❓ 未知错误',        color: '#6b7280' },
 }
 
 function getStatusColor(status) {
