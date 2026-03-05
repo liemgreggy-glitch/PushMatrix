@@ -255,7 +255,11 @@ async def get_account(account_id: int, db: Session = Depends(get_db)):
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
-    return account.to_dict()
+    result = account.to_dict()
+    result['session_string'] = account.session_string
+    result['api_id'] = account.api_id
+    result['api_hash'] = account.api_hash
+    return result
 
 
 @router.post("/")

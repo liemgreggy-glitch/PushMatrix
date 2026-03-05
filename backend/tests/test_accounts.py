@@ -135,6 +135,20 @@ def test_get_account(client):
     assert response.json()["phone"] == "+1234567890"
 
 
+def test_get_account_includes_session_fields(client):
+    """GET /api/accounts/{id} includes session_string, api_id, and api_hash."""
+    created = client.post(
+        "/api/accounts/",
+        json={"phone": "+1234567890", "session_string": "mysession", "api_id": 12345, "api_hash": "myhash"},
+    ).json()
+    response = client.get(f"/api/accounts/{created['id']}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["session_string"] == "mysession"
+    assert data["api_id"] == 12345
+    assert data["api_hash"] == "myhash"
+
+
 def test_get_account_not_found(client):
     """Non-existent account returns 404."""
     response = client.get("/api/accounts/9999")

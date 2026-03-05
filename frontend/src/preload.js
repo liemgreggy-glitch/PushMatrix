@@ -15,7 +15,15 @@ contextBridge.exposeInMainWorld('electron', {
       }
     },
     invoke: (channel, ...args) => {
-      const validChannels = ['get-app-version']
+      const validChannels = [
+        'get-app-version',
+        'save-session-to-local',
+        'move-session',
+        'update-session-config',
+        'delete-session',
+        'open-sessions-folder',
+        'get-sessions-dir',
+      ]
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, ...args)
       }

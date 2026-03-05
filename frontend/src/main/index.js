@@ -1,5 +1,8 @@
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, ipcMain, shell } = require('electron')
 const path = require('path')
+
+// Local session file manager (Electron main-process only)
+const sessionManager = require('./localSessionManager')
 
 const isDev = process.env.NODE_ENV === 'development'
 
@@ -144,3 +147,35 @@ ipcMain.on('log-message', (event, data) => {
 
 // IPC handlers
 ipcMain.handle('get-app-version', () => app.getVersion())
+
+// Save account session files to local sessions directory
+ipcMain.handle('save-session-to-local', async (_event, { account }) => {
+  return await sessionManager.saveSessionFromAccount(account)
+})
+
+// Move session files when restriction status changes
+ipcMain.handle('move-session', async (_event, { phone, oldStatus, newStatus }) => {
+  return await sessionManager.moveSession(phone, oldStatus, newStatus)
+})
+
+// Re-write the JSON config file for an account
+ipcMain.handle('update-session-config', async (_event, { account }) => {
+  return await sessionManager.updateConfig(account)
+})
+
+// Delete local session files when an account is removed
+ipcMain.handle('delete-session', async (_event, { phone, restrictionStatus }) => {
+  return await sessionManager.deleteSession(phone, restrictionStatus)
+})
+
+// Open the local sessions folder in the system file explorer
+ipcMain.handle('open-sessions-folder', async () => {
+  const sessionsDir = sessionManager.getBaseDir()
+  await shell.openPath(sessionsDir)
+  return { path: sessionsDir }
+})
+
+// Return the local sessions directory path
+ipcMain.handle('get-sessions-dir', () => {
+  return sessionManager.getBaseDir()
+})
