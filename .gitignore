@@ -45,6 +45,7 @@ Thumbs.db
 
 # Sessions (sensitive data)
 backend/sessions/
+sessions/
 *.session
 *.session-journal
 
