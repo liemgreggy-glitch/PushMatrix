@@ -24,10 +24,12 @@
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <el-button size="small" @click="handleRefresh" icon="Refresh">刷新</el-button>
+        <el-button size="small" @click="handleSelectChecked" icon="Check">选中</el-button>
         <el-button size="small" @click="handleSelectAll" icon="Select">全选</el-button>
+        <el-button size="small" @click="handleSelectUnchecked" icon="Minus">未选中</el-button>
         <el-button size="small" @click="handleCancelSelect" icon="Close">取消选中</el-button>
         <el-divider direction="vertical" />
+        <el-button size="small" @click="handleRefresh" icon="Refresh">刷新</el-button>
         <el-button size="small" icon="Plus" @click="showAddDialog = true">添加</el-button>
         <el-button size="small" icon="Upload" @click="$router.push('/accounts/import')">导入</el-button>
       </div>
@@ -143,7 +145,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import StatCard from '../../components/StatCard.vue'
 import ActionMenu from '../../components/ActionMenu.vue'
@@ -199,8 +201,32 @@ function handleSelectionChange(selection) {
   selectedAccounts.value = selection
 }
 
+function handleSelectChecked() {
+  // 保持当前选中状态
+  const checkedCount = selectedAccounts.value.length
+  if (checkedCount === 0) {
+    ElMessage.info('当前没有已选中的账号')
+  } else {
+    ElMessage.success(`已选中 ${checkedCount} 个账号`)
+  }
+}
+
 function handleSelectAll() {
   tableRef.value?.toggleAllSelection()
+}
+
+function handleSelectUnchecked() {
+  // 反选：选中所有未勾选的行，取消选中已勾选的行
+  const currentSelectedIds = new Set(selectedAccounts.value.map(acc => acc.id))
+  tableRef.value?.clearSelection()
+  
+  nextTick(() => {
+    accounts.value.forEach(acc => {
+      if (!currentSelectedIds.has(acc.id)) {
+        tableRef.value?.toggleRowSelection(acc, true)
+      }
+    })
+  })
 }
 
 function handleCancelSelect() {
@@ -327,4 +353,3 @@ onMounted(loadAccounts)
   color: var(--color-text-muted);
 }
 </style>
-
