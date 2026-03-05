@@ -149,8 +149,8 @@ ipcMain.on('log-message', (event, data) => {
 ipcMain.handle('get-app-version', () => app.getVersion())
 
 // Save account session files to local sessions directory
-ipcMain.handle('save-session-to-local', async (_event, { account }) => {
-  return await sessionManager.saveSessionFromAccount(account)
+ipcMain.handle('save-session-to-local', async (_event, { account, sessionContent = null, jsonConfig = null }) => {
+  return await sessionManager.saveSessionFromAccount(account, sessionContent, jsonConfig)
 })
 
 // Move session files when restriction status changes

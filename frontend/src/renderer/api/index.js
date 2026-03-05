@@ -5,7 +5,7 @@ const BASE_URL = 'http://45.77.121.38:8000'
 
 const http = axios.create({
   baseURL: BASE_URL,
-  timeout: 30000,
+  timeout: 300000, // 5 minutes – large batch imports need extra time
   headers: {
     'Content-Type': 'application/json',
   },
@@ -56,6 +56,7 @@ export const accountsApi = {
   import: (formData) => http.post('/api/accounts/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   importFiles: (formData, onProgress) => http.post('/api/accounts/import/files', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 600000, // 10 minutes for file uploads
     onUploadProgress: (progressEvent) => {
       if (onProgress && progressEvent.total) {
         const percentCompleted = progressEvent.loaded / progressEvent.total
