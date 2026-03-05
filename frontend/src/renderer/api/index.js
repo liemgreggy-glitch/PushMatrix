@@ -30,6 +30,16 @@ export const accountsApi = {
   bulkSet2fa: (data) => http.post('/api/accounts/bulk/set-2fa', data),
   bulkUpdateProfile: (data) => http.post('/api/accounts/bulk/update-profile', data),
   import: (formData) => http.post('/api/accounts/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  importFiles: (formData, onProgress) => http.post('/api/accounts/import/files', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (progressEvent) => {
+      if (onProgress && progressEvent.total) {
+        const percentCompleted = progressEvent.loaded / progressEvent.total
+        onProgress(percentCompleted)
+      }
+    }
+  }),
+  importSession: (data) => http.post('/api/accounts/import/session', data),
   export: () => http.get('/api/accounts/export'),
 }
 

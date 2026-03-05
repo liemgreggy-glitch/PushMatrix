@@ -13,6 +13,7 @@ function createWindow() {
       preload: path.join(__dirname, '../preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      devTools: true,
     },
     titleBarStyle: 'default',
     backgroundColor: '#1E1E2E',
@@ -21,10 +22,12 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
-    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(path.join(__dirname, '../../dist/renderer/index.html'))
   }
+
+  // 始终打开 DevTools（方便查看日志和调试）
+  mainWindow.webContents.openDevTools()
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
