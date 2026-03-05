@@ -72,6 +72,7 @@
     .log-error { color: #ff4444; }
     .log-success { color: #00ffff; }
     .log-debug { color: #888888; }
+    .log-plain { color: #d1d5db; }
 
     .timestamp {
       color: #666666;
@@ -136,6 +137,21 @@
     function appendLog(data) {
       const entry = document.createElement('div')
       entry.className = `log-entry log-${data.level || 'info'}`
+
+      // "plain" 级别：不添加额外时间戳和等级标签，直接显示消息（含自带时间戳）
+      if (data.level === 'plain') {
+        if (data.color) {
+          entry.style.color = data.color
+        }
+        const message = document.createElement('span')
+        message.textContent = data.message || ''
+        entry.appendChild(message)
+        consoleDiv.appendChild(entry)
+        if (autoScroll) {
+          consoleDiv.scrollTop = consoleDiv.scrollHeight
+        }
+        return
+      }
 
       const timestamp = document.createElement('span')
       timestamp.className = 'timestamp'

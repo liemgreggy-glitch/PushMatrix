@@ -264,7 +264,7 @@ async function handleBatchCheckSpam(accountsToCheck) {
   logCheck(`开始检查 ${total} 个账号，并发数: ${concurrency}`)
   logCheck('='.repeat(70))
 
-  const statusCounts = { UNRESTRICTED: 0, SPAM: 0, FROZEN: 0, BANNED: 0, UNKNOWN: 0 }
+  const statusCounts = { UNRESTRICTED: 0, SPAM: 0, FROZEN: 0, BANNED: 0, UNKNOWN: 0, UNAUTHORIZED: 0 }
   const limit = createConcurrencyLimit(concurrency)
   let completed = 0
 
@@ -282,13 +282,14 @@ async function handleBatchCheckSpam(accountsToCheck) {
         logCheckResult(index + 1, total, account.phone, status)
         if (completed % 10 === 0 || completed === total) {
           logCheck(
-            `进度: ${completed}/${total} | ✅ ${statusCounts.UNRESTRICTED} ⚠️ ${statusCounts.SPAM} ❄️ ${statusCounts.FROZEN} 🚫 ${statusCounts.BANNED} ❓ ${statusCounts.UNKNOWN}`
+            `进度: ${completed}/${total} | ✅ ${statusCounts.UNRESTRICTED} ⚠️ ${statusCounts.SPAM} ❄️ ${statusCounts.FROZEN} 🚫 ${statusCounts.BANNED} ❌ ${statusCounts.UNAUTHORIZED} ❓ ${statusCounts.UNKNOWN}`
           )
         }
         return result
       } catch (err) {
         completed++
         statusCounts.UNKNOWN = (statusCounts.UNKNOWN || 0) + 1
+        logCheck(`[${index + 1}/${total}] ${account.phone} → 错误: ${err.message}`)
         logCheckResult(index + 1, total, account.phone, 'ERROR')
         return { restriction_status: 'UNKNOWN' }
       }
@@ -303,6 +304,7 @@ async function handleBatchCheckSpam(accountsToCheck) {
     spam: statusCounts.SPAM,
     frozen: statusCounts.FROZEN,
     banned: statusCounts.BANNED,
+    unauthorized: statusCounts.UNAUTHORIZED,
     unknown: statusCounts.UNKNOWN,
   })
   logCheck('='.repeat(70))
