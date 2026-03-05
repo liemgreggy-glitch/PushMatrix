@@ -414,21 +414,32 @@ async function processFiles(files) {
           }
         })
 
-        totalSuccess += result.success || 0
-        totalFailed += result.failed || 0
-        if (result.details) {
-          allDetails.push(...result.details)
-        }
+        // Guard: result may be undefined if the interceptor returns nothing
+        const safeResult = (result && typeof result === 'object') ? result : {}
+        totalSuccess += safeResult.success || 0
+        totalFailed  += safeResult.failed  || 0
+        const details = Array.isArray(safeResult.details) ? safeResult.details : []
+        allDetails.push(...details)
 
-        logger.taskSuccess('导入', `第 ${i + 1} 批完成`, { success: result.success, failed: result.failed })
+        logger.taskSuccess('导入', `第 ${i + 1} 批完成`, { success: safeResult.success, failed: safeResult.failed })
 
         // Batch delay to avoid overloading the server
         if (i < batches.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 500))
         }
       } catch (err) {
-        logger.taskError('导入', `第 ${i + 1} 批失败`, err.message)
-        totalFailed += batch.length
+        // Try to read structured error info from the axios response body
+        const errData = err?.response?.data
+        if (errData && typeof errData === 'object') {
+          totalSuccess += errData.success || 0
+          totalFailed  += errData.failed  ?? batch.length
+          const errDetails = Array.isArray(errData.details) ? errData.details : []
+          allDetails.push(...errDetails)
+          logger.taskError('导入', `第 ${i + 1} 批失败`, errData.message || err.message)
+        } else {
+          totalFailed += batch.length
+          logger.taskError('导入', `第 ${i + 1} 批失败`, err.message)
+        }
       }
 
       // Update overall progress
