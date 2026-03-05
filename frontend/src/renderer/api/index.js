@@ -14,11 +14,11 @@ const http = axios.create({
 // 请求拦截器
 http.interceptors.request.use(
   config => {
-    logger.info(`📤 API 请求: ${config.method?.toUpperCase()} ${config.url}`)
+    logger.apiRequest(config.method, config.url)
     return config
   },
   err => {
-    logger.error('❌ API 请求错误', err.message)
+    logger.apiError('REQUEST', 0, err.message)
     return Promise.reject(err)
   }
 )
@@ -26,15 +26,17 @@ http.interceptors.request.use(
 // 响应拦截器
 http.interceptors.response.use(
   res => {
-    logger.success(`✅ API 响应: ${res.config.url}`)
+    // 成功响应不打印日志（除非开启详细模式）
+    logger.apiSuccess(res.config.url, res.status)
     return res.data
   },
   err => {
+    const status = err.response?.status || 0
     const message = err.response?.data?.detail || err.message || '请求失败'
-    logger.error(`❌ API 错误: ${message}`, {
-      url: err.config?.url,
-      status: err.response?.status,
-      data: err.response?.data
+    logger.apiError(err.config?.url, status, {
+      message,
+      status,
+      data: err.response?.data,
     })
     return Promise.reject(new Error(message))
   }
