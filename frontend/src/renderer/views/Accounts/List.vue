@@ -1,5 +1,5 @@
 <template>
-  <div class="page-container">
+  <div class="page-container accounts-container">
     <div class="page-header">
       <span class="page-title">账号列表</span>
       <div class="header-actions">
@@ -76,22 +76,29 @@
       </el-table-column>
     </el-table>
 
-    <!-- Bottom Action Bar -->
-    <div class="bottom-actions">
-      <el-dropdown trigger="click">
-        <el-button>
-          移动账号 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-        </el-button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item>移动到分组 A</el-dropdown-item>
-            <el-dropdown-item>移动到分组 B</el-dropdown-item>
-            <el-dropdown-item divided>创建新分组...</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
+    <!-- Fixed Bottom Action Bar -->
+    <div v-if="selectedAccounts.length > 0" class="fixed-action-bar">
+      <div class="action-bar-content">
+        <span class="selection-info">
+          已选择: {{ selectedAccounts.length }} / {{ accounts.length }} 个账号
+        </span>
+        <div class="action-buttons">
+          <el-dropdown trigger="click">
+            <el-button>
+              移动账号 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item>移动到分组 A</el-dropdown-item>
+                <el-dropdown-item>移动到分组 B</el-dropdown-item>
+                <el-dropdown-item divided>创建新分组...</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
 
-      <ActionMenu :selected-accounts="selectedAccounts" @action="handleAction" />
+          <ActionMenu :selected-accounts="selectedAccounts" @action="handleAction" />
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -359,6 +366,10 @@ onMounted(loadAccounts)
   margin-bottom: 20px;
 }
 
+.accounts-container {
+  padding-bottom: 80px;
+}
+
 .toolbar {
   margin-bottom: 16px;
   padding: 12px 16px;
@@ -378,13 +389,35 @@ onMounted(loadAccounts)
   margin-bottom: 16px;
 }
 
-.bottom-actions {
+.fixed-action-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: linear-gradient(to top, rgba(17, 24, 39, 0.98), rgba(17, 24, 39, 0.95));
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 16px 24px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.action-bar-content {
+  max-width: 1400px;
+  margin: 0 auto;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.selection-info {
+  color: #9ca3af;
+  font-size: 14px;
+}
+
+.action-buttons {
+  display: flex;
   gap: 12px;
-  padding: 16px;
-  background: #252938;
-  border-radius: 8px;
 }
 
 .text-muted {

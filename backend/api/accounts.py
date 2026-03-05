@@ -5,6 +5,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -745,7 +746,7 @@ async def import_files(
                 if ext == "zip":
                     with zipfile.ZipFile(file_path, "r") as zip_ref:
                         zip_ref.extractall(temp_dir)
-                    result = _process_extracted_files(temp_dir, db)
+                    result = await _process_extracted_files(temp_dir, db)
                     results["success"] += result["success"]
                     results["failed"] += result["failed"]
                     results["details"].extend(result["details"])
@@ -753,13 +754,13 @@ async def import_files(
                 elif ext == "rar":
                     with rarfile.RarFile(file_path, "r") as rar_ref:
                         rar_ref.extractall(temp_dir)
-                    result = _process_extracted_files(temp_dir, db)
+                    result = await _process_extracted_files(temp_dir, db)
                     results["success"] += result["success"]
                     results["failed"] += result["failed"]
                     results["details"].extend(result["details"])
 
                 elif ext == "session":
-                    detail = _process_session_file(file_path, filename, db)
+                    detail = await _process_session_file(file_path, filename, db)
                     if detail["success"]:
                         results["success"] += 1
                     else:
@@ -823,12 +824,12 @@ async def import_session(data: ImportSessionRequest, db: Session = Depends(get_d
 
 # ==================== Helper Functions ====================
 
-def _process_extracted_files(directory: str, db: Session) -> Dict[str, Any]:
+async def _process_extracted_files(directory: str, db: Session) -> Dict[str, Any]:
     results: Dict[str, Any] = {"success": 0, "failed": 0, "details": []}
     for fname in os.listdir(directory):
         if not fname.endswith(".session"):
             continue
-        detail = _process_session_file(os.path.join(directory, fname), fname, db)
+        detail = await _process_session_file(os.path.join(directory, fname), fname, db)
         if detail["success"]:
             results["success"] += 1
         else:
@@ -837,7 +838,7 @@ def _process_extracted_files(directory: str, db: Session) -> Dict[str, Any]:
     return results
 
 
-def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
+async def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
     """Process a .session file and convert to StringSession format."""
     phone = ""
     try:
@@ -876,9 +877,18 @@ def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
 
         country_name, country_flag, country_code = get_country_from_phone(phone)
 
+        # Fetch account details from Telegram
+        account_details = await _fetch_account_details(string_session, phone)
+
         account = Account(
             phone=phone,
             session_string=string_session,
+            username=account_details.get('username'),
+            first_name=account_details.get('first_name'),
+            last_name=account_details.get('last_name'),
+            telegram_id=account_details.get('telegram_id'),
+            two_fa_enabled=account_details.get('two_fa_enabled', False),
+            registered_months=account_details.get('registered_months'),
             country=country_name,
             country_flag=country_flag,
             country_code=country_code,
@@ -891,7 +901,7 @@ def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
             "filename": filename,
             "phone": phone,
             "success": True,
-            "message": "导入成功（如需检查限制状态，请确保已配置 API ID / API Hash）",
+            "message": "导入成功",
             "id": account.id,
         }
     except Exception as e:
@@ -901,6 +911,70 @@ def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
             "success": False,
             "message": f"Session 转换失败: {str(e)}",
         }
+
+
+async def _fetch_account_details(session_string: str, phone: str) -> dict:
+    """Fetch account details from Telegram using the session."""
+    _empty = {
+        'username': None,
+        'first_name': None,
+        'last_name': None,
+        'telegram_id': None,
+        'two_fa_enabled': False,
+        'registered_months': None,
+    }
+    try:
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+        from telethon.tl.functions.account import GetPasswordRequest
+
+        api_id = app_settings.telegram_api_id
+        api_hash = app_settings.telegram_api_hash
+
+        if not api_id or not api_hash:
+            return _empty
+
+        client = TelegramClient(StringSession(session_string), api_id, api_hash)
+        try:
+            await client.connect()
+
+            if not await client.is_user_authorized():
+                return _empty
+
+            me = await client.get_me()
+
+            # Rough account age estimation: Telegram IDs increase over time
+            # (approximately 1 million new users per month in early years).
+            # This is a very coarse estimate and may be far from accurate.
+            registered_months = None
+            if me and me.id:
+                registered_months = max(1, me.id // 1_000_000)
+
+            # Check 2FA status
+            two_fa_enabled = False
+            try:
+                password_info = await client(GetPasswordRequest())
+                two_fa_enabled = password_info.has_password
+            except Exception as exc:
+                # GetPasswordRequest may fail for various reasons (e.g., unsupported layer);
+                # silently default to False rather than failing the entire import.
+                logger.debug("Could not determine 2FA status for %s: %s", phone, exc)
+
+            return {
+                'username': me.username if me else None,
+                'first_name': me.first_name if me else None,
+                'last_name': me.last_name if me else None,
+                'telegram_id': str(me.id) if me else None,
+                'two_fa_enabled': two_fa_enabled,
+                'registered_months': registered_months,
+            }
+        finally:
+            if client.is_connected():
+                await client.disconnect()
+
+    except Exception as e:
+        logger.warning("获取账号信息失败 (%s): %s", phone, e)
+        return _empty
 
 
 def _create_account_from_config(config: dict, db: Session) -> dict:
