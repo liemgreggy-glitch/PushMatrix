@@ -2,29 +2,11 @@ appId: com.pushmatrix.app
 productName: PushMatrix
 directories:
   output: dist/electron
-  buildResources: build
-files:
-  - dist/renderer/**/*
-  - src/main/**/*
-  - src/preload.js
-  - node_modules/**/*
 win:
-  target:
-    - target: nsis
-      arch:
-        - x64
-  icon: build/icon.ico
-mac:
-  target: dmg
-  icon: build/icon.icns
-linux:
-  target: AppImage
-  icon: build/icon.png
+  target: nsis
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: build/icon.ico
-  uninstallerIcon: build/icon.ico
-  installerHeaderIcon: build/icon.ico
-  createDesktopShortcut: true
-  createStartMenuShortcut: true
+extraResources:
+  - from: src/console.html
+    to: console.html
