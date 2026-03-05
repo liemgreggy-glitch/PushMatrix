@@ -66,6 +66,7 @@ export const accountsApi = {
   importSession: (data) => http.post('/api/accounts/import/session', data),
   export: (params) => http.get('/api/accounts/export', { params }),
   checkSpamStatusSingle: (id) => http.post(`/api/accounts/check-spam-status-single/${id}`),
+  checkRestrictionStatus: (id) => http.post(`/api/accounts/${id}/check-restriction`),
 }
 
 export const proxiesApi = {

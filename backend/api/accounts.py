@@ -386,6 +386,155 @@ async def check_spam_status_single(account_id: int, db: Session = Depends(get_db
                 "status": "disconnected", "message": str(e)}
 
 
+@router.post("/{account_id}/check-restriction")
+async def check_restriction_status(account_id: int, db: Session = Depends(get_db)):
+    """检查单个账号的限制状态（通过 @SpamBot），结果存入专用字段"""
+    # Keywords from @SpamBot replies (may need updating if SpamBot changes its messages)
+    _UNRESTRICTED_KW = ("good news", "no limits", "no complaints", "not limited", "seems fine")
+    _SPAM_KW = ("spam", "limited", "restricted", "unfortunately")
+    _FROZEN_KW = ("frozen", "suspended", "temporarily")
+    _BANNED_KW = ("banned", "deleted", "deactivated", "permanently")
+
+    # Mapping from restriction_status to legacy `status` column values used elsewhere in the app
+    _STATUS_MAP = {
+        "UNRESTRICTED": "unlimited",
+        "SPAM": "spam",
+        "FROZEN": "frozen",
+        "BANNED": "banned",
+        "UNKNOWN": "disconnected",
+    }
+
+    _SPAMBOT_WAIT_SECS = 3   # Seconds to wait for @SpamBot reply
+    _RAW_REPLY_DB_MAX = 500  # Max chars stored in DB
+    _RAW_REPLY_API_MAX = 500  # Max chars returned in API response (same as DB)
+
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="账号不存在")
+
+    if not account.session_string:
+        return {
+            "account_id": account_id,
+            "phone": account.phone,
+            "restriction_status": "UNKNOWN",
+            "raw_reply": "缺少 session_string",
+            "checked_at": datetime.utcnow().isoformat(),
+            "error": "无法检查：缺少有效的 session",
+        }
+
+    api_id = account.api_id or int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
+    api_hash = account.api_hash or os.environ.get("TELEGRAM_API_HASH", "")
+
+    if not api_id or not api_hash:
+        return {
+            "account_id": account_id,
+            "phone": account.phone,
+            "restriction_status": "UNKNOWN",
+            "raw_reply": "缺少 API ID / API Hash",
+            "checked_at": datetime.utcnow().isoformat(),
+            "error": "账号缺少 API ID / API Hash，请在账号或系统设置中配置",
+        }
+
+    try:
+        from telethon import TelegramClient
+        from telethon.errors import FloodWaitError
+        from telethon.sessions import StringSession
+
+        client = TelegramClient(
+            StringSession(account.session_string),
+            api_id,
+            api_hash,
+            connection_retries=3,
+            retry_delay=1,
+        )
+        await client.connect()
+
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            account.restriction_status = "UNKNOWN"
+            account.restriction_raw_reply = "账号未授权或 session 已失效"
+            account.restriction_checked_at = datetime.utcnow()
+            db.commit()
+            return {
+                "account_id": account_id,
+                "phone": account.phone,
+                "restriction_status": "UNKNOWN",
+                "raw_reply": "账号未授权或 session 已失效",
+                "checked_at": account.restriction_checked_at.isoformat(),
+            }
+
+        try:
+            import asyncio
+
+            await client.send_message("@SpamBot", "/start")
+            await asyncio.sleep(_SPAMBOT_WAIT_SECS)
+            messages = await client.get_messages("@SpamBot", limit=1)
+            await client.disconnect()
+
+            raw_reply = messages[0].text if messages else ""
+            raw_reply_lower = raw_reply.lower()
+
+            if any(k in raw_reply_lower for k in _UNRESTRICTED_KW):
+                restriction_status = "UNRESTRICTED"
+            elif any(k in raw_reply_lower for k in _SPAM_KW):
+                restriction_status = "SPAM"
+            elif any(k in raw_reply_lower for k in _FROZEN_KW):
+                restriction_status = "FROZEN"
+            elif any(k in raw_reply_lower for k in _BANNED_KW):
+                restriction_status = "BANNED"
+            else:
+                restriction_status = "UNKNOWN"
+
+            account.restriction_status = restriction_status
+            account.restriction_raw_reply = raw_reply[:_RAW_REPLY_DB_MAX]
+            account.restriction_checked_at = datetime.utcnow()
+            account.status = _STATUS_MAP.get(restriction_status, "disconnected")
+            account.is_spam = restriction_status == "SPAM"
+            account.is_banned = restriction_status == "BANNED"
+            db.commit()
+
+            return {
+                "account_id": account_id,
+                "phone": account.phone,
+                "restriction_status": restriction_status,
+                "raw_reply": raw_reply[:_RAW_REPLY_API_MAX],
+                "checked_at": account.restriction_checked_at.isoformat(),
+            }
+
+        except FloodWaitError as e:
+            await client.disconnect()
+            account.restriction_status = "UNKNOWN"
+            account.restriction_raw_reply = f"Telegram 限流，需等待 {e.seconds} 秒"
+            account.restriction_checked_at = datetime.utcnow()
+            db.commit()
+            return {
+                "account_id": account_id,
+                "phone": account.phone,
+                "restriction_status": "UNKNOWN",
+                "raw_reply": f"Telegram 限流，需等待 {e.seconds} 秒",
+                "checked_at": account.restriction_checked_at.isoformat(),
+            }
+
+        except Exception as e:
+            await client.disconnect()
+            raise e
+
+    except Exception as e:
+        error_message = str(e)
+        account.restriction_status = "UNKNOWN"
+        account.restriction_raw_reply = f"检查失败: {error_message[:_RAW_REPLY_DB_MAX - 10]}"
+        account.restriction_checked_at = datetime.utcnow()
+        db.commit()
+        return {
+            "account_id": account_id,
+            "phone": account.phone,
+            "restriction_status": "UNKNOWN",
+            "raw_reply": error_message[:200],
+            "checked_at": account.restriction_checked_at.isoformat(),
+            "error": error_message,
+        }
+
+
 @router.post("/bulk/set-2fa")
 async def bulk_set_2fa(data: BulkSet2FARequest, db: Session = Depends(get_db)):
     """批量设置 2FA（占位实现）"""

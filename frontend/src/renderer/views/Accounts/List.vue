@@ -102,6 +102,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import StatCard from '../../components/StatCard.vue'
 import ActionMenu from '../../components/ActionMenu.vue'
 import { accountsApi } from '../../api/index.js'
+import logger from '../../utils/logger.js'
 
 const tableRef = ref(null)
 const accounts = ref([])
@@ -239,59 +240,85 @@ function createConcurrencyLimit(concurrency) {
 }
 
 async function handleBatchCheckSpam(accountsToCheck) {
+  if (!accountsToCheck.length) {
+    ElMessage.warning('请先选择账号')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定检查选中的 ${accountsToCheck.length} 个账号的限制状态吗？\n\n此操作将登录每个账号并向 @SpamBot 发送消息。`,
+      '批量检查确认',
+      { confirmButtonText: '开始检查', cancelButtonText: '取消', type: 'info' }
+    )
+  } catch {
+    logger.info('用户取消了批量检查')
+    return
+  }
+
   const concurrency = parseInt(localStorage.getItem('check_concurrency') || '100', 10)
   const delay = parseInt(localStorage.getItem('check_delay_ms') || '500', 10)
   const total = accountsToCheck.length
 
-  console.log(`📋 [检查限制] 开始检查 ${total} 个账号，并发数: ${concurrency}`)
+  logger.task('检查限制', '='.repeat(70))
+  logger.task('检查限制', `🚀 开始检查 ${total} 个账号的限制状态`)
+  logger.task('检查限制', `⚙️ 并发数: ${concurrency}, 请求延迟: ${delay}ms`)
+  logger.task('检查限制', '='.repeat(70))
 
-  const statusCounts = { unlimited: 0, spam: 0, frozen: 0, banned: 0, disconnected: 0, idle: 0 }
+  const statusCounts = { UNRESTRICTED: 0, SPAM: 0, FROZEN: 0, BANNED: 0, UNKNOWN: 0 }
   const limit = createConcurrencyLimit(concurrency)
   let completed = 0
 
   const STATUS_LABELS = {
-    unlimited: '✅ 无限制',
-    spam: '⚠️ 垃圾邮件限制',
-    frozen: '❄️ 冻结',
-    banned: '🚫 封禁',
-    disconnected: '🔌 未连接',
-    idle: '⏸️ 未工作',
+    UNRESTRICTED: '✅ 无限制',
+    SPAM: '⚠️ 垃圾邮件限制',
+    FROZEN: '❄️ 冻结',
+    BANNED: '🚫 封禁',
+    UNKNOWN: '❓ 未知/错误',
   }
 
-  const tasks = accountsToCheck.map(account =>
+  const tasks = accountsToCheck.map((account, index) =>
     limit(async () => {
       if (delay > 0) {
         await new Promise(r => setTimeout(r, delay))
       }
       try {
-        const result = await accountsApi.checkSpamStatusSingle(account.id)
+        logger.task('检查限制', `[${index + 1}/${total}] 🔍 正在检查 ${account.phone}...`)
+        const result = await accountsApi.checkRestrictionStatus(account.id)
         completed++
-        const status = result.status || 'idle'
+        const status = result.restriction_status || 'UNKNOWN'
         statusCounts[status] = (statusCounts[status] || 0) + 1
         const label = STATUS_LABELS[status] || status
-        console.log(`${label.split(' ')[0]} [检查限制] [${completed}/${total}] ${account.phone} → ${label}`)
+        logger.taskSuccess('检查限制', `[${index + 1}/${total}] ${account.phone} → ${label}`)
+        if (completed % 10 === 0 || completed === total) {
+          logger.task(
+            '检查限制',
+            `📊 进度: ${completed}/${total} | ✅ ${statusCounts.UNRESTRICTED} ⚠️ ${statusCounts.SPAM} ❄️ ${statusCounts.FROZEN} 🚫 ${statusCounts.BANNED} ❓ ${statusCounts.UNKNOWN}`
+          )
+        }
         return result
       } catch (err) {
         completed++
-        statusCounts.disconnected = (statusCounts.disconnected || 0) + 1
-        console.log(`❌ [检查限制] [${completed}/${total}] ${account.phone} → 错误: ${err.message}`)
-        return { status: 'disconnected' }
+        statusCounts.UNKNOWN = (statusCounts.UNKNOWN || 0) + 1
+        logger.taskError('检查限制', `[${index + 1}/${total}] ${account.phone} 检查失败`, err.message)
+        return { restriction_status: 'UNKNOWN' }
       }
     })
   )
 
   await Promise.all(tasks)
 
-  console.log('📋 [检查限制] =======================================')
-  console.log('✅ [检查限制] 检查完成！统计结果：')
-  if (statusCounts.unlimited) console.log(`📋 [检查限制] ✅ 无限制: ${statusCounts.unlimited} 个`)
-  if (statusCounts.spam) console.log(`📋 [检查限制] ⚠️ 垃圾邮件限制: ${statusCounts.spam} 个`)
-  if (statusCounts.frozen) console.log(`📋 [检查限制] ❄️ 冻结: ${statusCounts.frozen} 个`)
-  if (statusCounts.banned) console.log(`📋 [检查限制] 🚫 封禁: ${statusCounts.banned} 个`)
-  if (statusCounts.disconnected) console.log(`📋 [检查限制] 🔌 未连接/错误: ${statusCounts.disconnected} 个`)
-  console.log('📋 [检查限制] =======================================')
+  logger.task('检查限制', '='.repeat(70))
+  logger.taskSuccess('检查限制', '✅ 检查完成！最终统计：')
+  logger.task('检查限制', `✅ 无限制: ${statusCounts.UNRESTRICTED} 个`)
+  logger.task('检查限制', `⚠️ 垃圾邮件限制: ${statusCounts.SPAM} 个`)
+  logger.task('检查限制', `❄️ 冻结: ${statusCounts.FROZEN} 个`)
+  logger.task('检查限制', `🚫 封禁: ${statusCounts.BANNED} 个`)
+  logger.task('检查限制', `❓ 未知/错误: ${statusCounts.UNKNOWN} 个`)
+  logger.task('检查限制', '='.repeat(70))
 
   await loadAccounts()
+  ElMessage.success(`检查完成！无限制: ${statusCounts.UNRESTRICTED}, 受限: ${statusCounts.SPAM + statusCounts.FROZEN + statusCounts.BANNED}`)
 }
 
 async function handleAction(command, actionAccounts) {
