@@ -5,7 +5,14 @@
       <div class="header-actions">
         <el-button icon="Upload" @click="$router.push('/accounts/import')">导入账号</el-button>
         <el-button icon="Download" @click="handleExport">导出账号</el-button>
+        <el-button v-if="isElectron" icon="Folder" @click="handleOpenSessionsFolder">打开 Sessions 目录</el-button>
       </div>
+    </div>
+
+    <!-- Sessions directory path hint -->
+    <div v-if="isElectron && sessionsDir" class="sessions-dir-hint">
+      <el-icon><Folder /></el-icon>
+      <span>{{ sessionsDir }}</span>
     </div>
 
     <!-- Statistics Cards -->
@@ -104,8 +111,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Folder } from '@element-plus/icons-vue'
 import StatCard from '../../components/StatCard.vue'
 import ActionMenu from '../../components/ActionMenu.vue'
 import { accountsApi } from '../../api/index.js'
@@ -115,6 +123,11 @@ const tableRef = ref(null)
 const accounts = ref([])
 const loading = ref(false)
 const selectedAccounts = ref([])
+const sessionsDir = ref('')
+
+const isElectron = computed(() => {
+  return typeof window !== 'undefined' && window.electron !== undefined
+})
 
 const stats = ref([
   { key: 'total', value: 0, label: '账号总数', color: '#10b981' },
@@ -189,6 +202,15 @@ async function handleRefresh() {
   await loadAccounts()
 }
 
+async function handleOpenSessionsFolder() {
+  if (!isElectron.value) return
+  try {
+    await window.electron.ipcRenderer.invoke('open-sessions-folder')
+  } catch (err) {
+    ElMessage.error('打开目录失败')
+  }
+}
+
 async function handleExport() {
   try {
     const data = await accountsApi.export({ format: 'json' })
@@ -218,6 +240,26 @@ async function handleBatchDelete() {
     )
     const ids = selectedAccounts.value.map(a => a.id)
     const result = await accountsApi.bulkDelete({ account_ids: ids })
+
+    // Delete local session files for each deleted account
+    if (isElectron.value) {
+      let localDeleteFailed = 0
+      for (const account of selectedAccounts.value) {
+        try {
+          await window.electron.ipcRenderer.invoke('delete-session', {
+            phone: account.phone,
+            restrictionStatus: account.restriction_status,
+          })
+        } catch (err) {
+          localDeleteFailed++
+          console.error(`删除本地文件失败 (${account.phone}):`, err)
+        }
+      }
+      if (localDeleteFailed > 0) {
+        ElMessage.warning(`${localDeleteFailed} 个账号的本地文件删除失败，请手动清理 sessions 目录`)
+      }
+    }
+
     ElMessage.success(`已删除 ${result.deleted} 个账号`)
     await loadAccounts()
   } catch (err) {
@@ -282,11 +324,31 @@ async function handleBatchCheckSpam(accountsToCheck) {
       }
       try {
         logCheck(`[${index + 1}/${total}] ${account.phone} → 正在连接...`)
+        const oldStatus = account.restriction_status
         const result = await accountsApi.checkRestrictionStatus(account.id)
         completed++
         const status = result.restriction_status || 'UNKNOWN'
         statusCounts[status] = (statusCounts[status] || 0) + 1
         logCheckResult(index + 1, total, account.phone, status)
+
+        // Move local session files if restriction status changed
+        if (isElectron.value && oldStatus !== status) {
+          try {
+            await window.electron.ipcRenderer.invoke('move-session', {
+              phone: account.phone,
+              oldStatus,
+              newStatus: status,
+            })
+            // Update JSON config with latest account data
+            const updatedAccount = await accountsApi.getOne(account.id)
+            await window.electron.ipcRenderer.invoke('update-session-config', {
+              account: updatedAccount,
+            })
+          } catch (localErr) {
+            console.error(`本地文件操作失败 (${account.phone}):`, localErr)
+          }
+        }
+
         if (completed % 10 === 0 || completed === total) {
           logCheck(
             `进度: ${completed}/${total} | ✅ ${statusCounts.UNRESTRICTED} ⚠️ ${statusCounts.SPAM} ❄️ ${statusCounts.FROZEN} 🚫 ${statusCounts.BANNED} ❌ ${statusCounts.UNAUTHORIZED} ❓ ${statusCounts.UNKNOWN}`
@@ -355,7 +417,16 @@ async function loadAccounts() {
   }
 }
 
-onMounted(loadAccounts)
+onMounted(async () => {
+  await loadAccounts()
+  if (isElectron.value) {
+    try {
+      sessionsDir.value = await window.electron.ipcRenderer.invoke('get-sessions-dir')
+    } catch (err) {
+      console.error('获取 sessions 目录失败:', err)
+    }
+  }
+})
 </script>
 
 <style scoped>
@@ -422,5 +493,20 @@ onMounted(loadAccounts)
 
 .text-muted {
   color: var(--color-text-muted);
+}
+
+.sessions-dir-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 12px;
+  padding: 6px 12px;
+  background: #1a1d2e;
+  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

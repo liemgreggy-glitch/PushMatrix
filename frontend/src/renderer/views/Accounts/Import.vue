@@ -163,6 +163,10 @@ import { ElMessage } from 'element-plus'
 import { accountsApi } from '../../api/index.js'
 import logger from '../../utils/logger.js'
 
+const isElectron = computed(() => {
+  return typeof window !== 'undefined' && window.electron !== undefined
+})
+
 const activeTab = ref('file')
 const isDragover = ref(false)
 const importing = ref(false)
@@ -356,6 +360,10 @@ async function processFiles(files) {
 
     if (successCount.value > 0) {
       logger.taskSuccess('导入', `成功导入 ${successCount.value} 个账号`)
+      // Save newly imported accounts to the local sessions directory
+      if (isElectron.value) {
+        await saveImportedAccountsToLocal(result.details || [])
+      }
     }
   } catch (err) {
     importStatus.value = 'exception'
@@ -364,6 +372,34 @@ async function processFiles(files) {
     ElMessage.error('导入失败')
   } finally {
     importing.value = false
+  }
+}
+
+// Save newly imported accounts to the local sessions directory
+async function saveImportedAccountsToLocal(details) {
+  let savedCount = 0
+  let failedCount = 0
+  for (const detail of details) {
+    if (detail.success && detail.id) {
+      try {
+        const account = await accountsApi.getOne(detail.id)
+        const result = await window.electron.ipcRenderer.invoke('save-session-to-local', { account })
+        if (result && result.success) {
+          savedCount++
+        } else {
+          failedCount++
+        }
+      } catch (err) {
+        failedCount++
+        console.error(`保存本地 session 失败 (${detail.phone}):`, err)
+      }
+    }
+  }
+  if (savedCount > 0) {
+    ElMessage.success(`已保存 ${savedCount} 个账号到本地 sessions 目录`, { duration: 3000 })
+  }
+  if (failedCount > 0) {
+    ElMessage.warning(`${failedCount} 个账号保存到本地失败，请检查 sessions 目录权限`)
   }
 }
 
@@ -395,6 +431,15 @@ async function importSession() {
         success: true,
         message: '导入成功',
       })
+      // Save to local sessions directory
+      if (isElectron.value && result.account) {
+        try {
+          const fullAccount = await accountsApi.getOne(result.account.id)
+          await window.electron.ipcRenderer.invoke('save-session-to-local', { account: fullAccount })
+        } catch (err) {
+          console.error('保存本地 session 失败:', err)
+        }
+      }
       sessionForm.value = { session_string: '', phone: '', api_id: '', api_hash: '' }
     } else {
       logger.taskError('导入', 'Session 导入失败', result.message)
