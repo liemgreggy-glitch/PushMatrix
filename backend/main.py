@@ -13,7 +13,7 @@ from api import (
     stats,
     settings,
 )
-from database.connection import init_db
+from database.connection import check_and_migrate
 
 app = FastAPI(
     title="PushMatrix API",
@@ -32,7 +32,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    init_db()
+    check_and_migrate()
 
 app.include_router(accounts.router)
 app.include_router(proxies.router)
