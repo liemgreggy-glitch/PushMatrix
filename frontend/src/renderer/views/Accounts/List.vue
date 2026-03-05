@@ -457,7 +457,7 @@ async function loadAccounts() {
       }
     }
   } catch (err) {
-    accounts.value = []   // ensure accounts is always an array on error
+    accounts.value = []   
     ElMessage.error('加载账号列表失败: ' + (err.message || '未知错误'))
   } finally {
     loading.value = false
