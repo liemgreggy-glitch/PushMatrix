@@ -36,7 +36,13 @@ function createConsoleWindow() {
     },
   })
 
-  consoleWindow.loadFile(path.join(__dirname, '../console.html'))
+  // 🔧 修复：根据环境使用不同��径
+  if (isDev) {
+    consoleWindow.loadFile(path.join(__dirname, '../console.html'))
+  } else {
+    // 生产环境：从 resources 目录加载
+    consoleWindow.loadFile(path.join(process.resourcesPath, 'console.html'))
+  }
 
   consoleWindow.on('closed', () => {
     consoleWindow = null
@@ -51,6 +57,15 @@ function createConsoleWindow() {
     setTimeout(() => {
       createMainWindow()
     }, 500)
+  })
+
+  // 调试：监听加载失败
+  consoleWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('❌ 控制台窗口加载失败:', errorCode, errorDescription)
+    console.error('尝试加载路径:', isDev 
+      ? path.join(__dirname, '../console.html')
+      : path.join(process.resourcesPath, 'console.html')
+    )
   })
 
   return consoleWindow
@@ -114,7 +129,12 @@ app.on('window-all-closed', () => {
 // IPC: 接收前端日志
 ipcMain.on('console-log', (event, level, message, data) => {
   sendLog(level, message, data)
-  console[level] && console[level](message, data || '')
+  // 确保 console[level] 存在
+  if (console[level]) {
+    console[level](message, data || '')
+  } else {
+    console.log(`[${level.toUpperCase()}]`, message, data || '')
+  }
 })
 
 // IPC: 接收自定义日志
