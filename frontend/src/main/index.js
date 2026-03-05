@@ -180,6 +180,11 @@ ipcMain.handle('get-sessions-dir', () => {
   return sessionManager.getBaseDir()
 })
 
+// Check restriction status for a local session account (no backend DB record needed)
+ipcMain.handle('check-restriction', async (_event, { phone, sessionFolder }) => {
+  return await sessionManager.checkRestriction(phone, sessionFolder)
+})
+
 // Scan local sessions directory and return account list
 ipcMain.handle('scan-local-accounts', async () => {
   return await sessionManager.scanAllAccounts()

@@ -46,7 +46,7 @@
       :data="accounts"
       @selection-change="handleSelectionChange"
       class="account-table"
-      row-key="id"
+      row-key="phone"
     >
       <el-table-column type="selection" width="50" />
       <el-table-column label="手机号" prop="phone" width="150" />
@@ -343,13 +343,21 @@ async function handleBatchCheckSpam(accountsToCheck) {
       try {
         logCheck(`[${index + 1}/${total}] ${account.phone} → 正在连接...`)
         const oldStatus = account.restriction_status
-        const result = await accountsApi.checkRestrictionStatus(account.id)
+        let result
+        if (isElectron.value) {
+          result = await window.electron.ipcRenderer.invoke('check-restriction', {
+            phone: account.phone,
+            sessionFolder: account._localFolder,
+          })
+        } else {
+          result = await accountsApi.checkRestrictionStatus(account.id)
+        }
         completed++
         const status = result.restriction_status || 'UNKNOWN'
         statusCounts[status] = (statusCounts[status] || 0) + 1
         logCheckResult(index + 1, total, account.phone, status)
 
-        // Move local session files if restriction status changed
+        // Move local session files if restriction status changed (Electron only)
         if (isElectron.value && oldStatus !== status) {
           try {
             await window.electron.ipcRenderer.invoke('move-session', {
@@ -357,10 +365,9 @@ async function handleBatchCheckSpam(accountsToCheck) {
               oldStatus,
               newStatus: status,
             })
-            // Update JSON config with latest account data
-            const updatedAccount = await accountsApi.getOne(account.id)
+            // Update JSON config with the result data (no DB record in Electron mode)
             await window.electron.ipcRenderer.invoke('update-session-config', {
-              account: updatedAccount,
+              account: { ...account, restriction_status: status },
             })
           } catch (localErr) {
             console.error(`本地文件操作失败 (${account.phone}):`, localErr)

@@ -421,6 +421,50 @@ class LocalSessionManager {
 
     return results
   }
+
+  /**
+   * Check restriction status for a local session by sending the session file
+   * to the backend's /api/accounts/check-restriction-local endpoint.
+   * Returns { restriction_status, phone, raw_reply?, error? }
+   */
+  async checkRestriction(phone, folderName) {
+    const folderPath = path.join(this.baseDir, folderName || '未检查')
+    const sessionPath = path.join(folderPath, `${phone}.session`)
+    const jsonPath = path.join(folderPath, `${phone}.json`)
+
+    try {
+      let config = {}
+      try {
+        const content = await fsp.readFile(jsonPath, 'utf8')
+        config = JSON.parse(content)
+      } catch {}
+
+      const api_id = config.app_id || null
+      const api_hash = config.app_hash || null
+
+      const sessionExists = await fsp.access(sessionPath).then(() => true).catch(() => false)
+      if (!sessionExists) {
+        return { restriction_status: 'UNKNOWN', phone, error: '本地 session 文件不存在' }
+      }
+
+      const sessionBytes = await fsp.readFile(sessionPath)
+      const sessionBase64 = sessionBytes.toString('base64')
+
+      const axios = require('axios')
+      const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000'
+
+      const resp = await axios.post(
+        `${backendUrl}/api/accounts/check-restriction-local`,
+        { phone, session_base64: sessionBase64, api_id, api_hash },
+        { timeout: 60000 }
+      )
+
+      return resp.data
+    } catch (err) {
+      console.error(`❌ 检查限制状态失败 (${phone}):`, err.message)
+      return { restriction_status: 'UNKNOWN', phone, error: err.message }
+    }
+  }
 }
 
 module.exports = new LocalSessionManager()
