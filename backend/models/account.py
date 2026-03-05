@@ -45,6 +45,9 @@ class Account(Base):
     registered_months = Column(Integer)
     tags = Column(Text)  # JSON string for SQLite compatibility
     remark = Column(Text)
+    restriction_status = Column(String(20), nullable=True)  # UNRESTRICTED/SPAM/FROZEN/BANNED/UNKNOWN
+    restriction_raw_reply = Column(Text, nullable=True)     # SpamBot 原始回复
+    restriction_checked_at = Column(DateTime(timezone=True), nullable=True)  # 最后检查时间
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     last_used_at = Column(DateTime(timezone=True))
@@ -78,6 +81,9 @@ class Account(Base):
             "health_score": self.health_score,
             "tags": json.loads(self.tags) if self.tags else [],
             "remark": self.remark,
+            "restriction_status": self.restriction_status,
+            "restriction_raw_reply": self.restriction_raw_reply,
+            "restriction_checked_at": self.restriction_checked_at.isoformat() if self.restriction_checked_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,

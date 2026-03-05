@@ -242,3 +242,48 @@ def test_export_csv(client):
     response = client.get("/api/accounts/export?format=csv")
     assert response.status_code == 200
     assert response.json()["format"] == "csv"
+
+
+# ==================== POST /api/accounts/{id}/check-restriction ====================
+
+def test_check_restriction_not_found(client):
+    """check-restriction returns 404 for missing account."""
+    response = client.post("/api/accounts/9999/check-restriction")
+    assert response.status_code == 404
+
+
+def test_check_restriction_no_session(client):
+    """check-restriction returns UNKNOWN when no session_string."""
+    acc = client.post("/api/accounts/", json={"phone": "+1234567890"}).json()
+    response = client.post(f"/api/accounts/{acc['id']}/check-restriction")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["restriction_status"] == "UNKNOWN"
+    assert data["phone"] == "+1234567890"
+    assert "error" in data
+
+
+def test_check_restriction_no_api_credentials(client, monkeypatch):
+    """check-restriction returns UNKNOWN when session exists but no api_id/api_hash."""
+    monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_API_HASH", raising=False)
+    acc = client.post(
+        "/api/accounts/",
+        json={"phone": "+1234567890", "session_string": "fake_session"},
+    ).json()
+    response = client.post(f"/api/accounts/{acc['id']}/check-restriction")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["restriction_status"] == "UNKNOWN"
+    assert "error" in data
+
+
+def test_check_restriction_fields_in_account_response(client):
+    """After a check, the account response includes restriction fields."""
+    acc = client.post("/api/accounts/", json={"phone": "+1234567890"}).json()
+    # Run check (will return UNKNOWN due to missing session)
+    client.post(f"/api/accounts/{acc['id']}/check-restriction")
+    updated = client.get(f"/api/accounts/{acc['id']}").json()
+    # restriction_status and restriction_checked_at should be present in to_dict output
+    assert "restriction_status" in updated
+    assert "restriction_checked_at" in updated
