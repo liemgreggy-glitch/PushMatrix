@@ -161,6 +161,7 @@
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { accountsApi } from '../../api/index.js'
+import logger from '../../utils/logger.js'
 
 const activeTab = ref('file')
 const isDragover = ref(false)
@@ -219,8 +220,12 @@ async function handleDrop(e) {
     }
   }
 
+  logger.task('导入', `拖拽了 ${files.length} 个文件`, { fileNames: files.map(f => f.name) })
+
   if (files.length > 0) {
     await processFiles(files)
+  } else {
+    ElMessage.warning('请拖拽文件到此处')
   }
 }
 
@@ -240,17 +245,20 @@ async function processEntry(entry, files) {
 
 // 触发文件夹选择
 function triggerFileSelect() {
+  logger.task('导入', '打开文件夹选择器')
   fileInput.value.click()
 }
 
 // 触发单文件选择
 function triggerSingleFileSelect() {
+  logger.task('导入', '打开文件选择器')
   singleFileInput.value.click()
 }
 
 // 文件选择
 async function handleFileSelect(e) {
   const files = Array.from(e.target.files)
+  logger.task('导入', `用户选择了 ${files.length} 个文件`, { fileNames: files.map(f => f.name) })
   if (files.length > 0) {
     await processFiles(files)
   }
@@ -259,6 +267,8 @@ async function handleFileSelect(e) {
 
 // 处理文件
 async function processFiles(files) {
+  logger.task('导入', '开始处理文件', { totalFiles: files.length })
+
   // 过滤不支持的格式
   const unsupportedFiles = files.filter(f => {
     const ext = f.name.toLowerCase().split('.').pop()
@@ -275,7 +285,22 @@ async function processFiles(files) {
     return ['session', 'zip', 'rar', 'json'].includes(ext)
   })
 
+  const sessionCount = supportedFiles.filter(f => f.name.toLowerCase().endsWith('.session')).length
+  const jsonCount = supportedFiles.filter(f => f.name.toLowerCase().endsWith('.json')).length
+  const archiveCount = supportedFiles.filter(f => {
+    const ext = f.name.toLowerCase().split('.').pop()
+    return ext === 'zip' || ext === 'rar'
+  }).length
+
+  logger.task('导入', '文件分类完成', {
+    sessionCount,
+    jsonCount,
+    archiveCount,
+    total: supportedFiles.length,
+  })
+
   if (supportedFiles.length === 0) {
+    logger.taskError('导入', '未找到有效的 .session 或 .json 文件')
     ElMessage.error('没有可导入的文件')
     return
   }
@@ -296,25 +321,46 @@ async function processFiles(files) {
     formData.append('files', file)
   })
 
+  logger.task('导入', `准备上传 ${supportedFiles.length} 个文件到后端`)
+
   try {
     importProgressText.value = '正在上传文件...'
+    logger.task('导入', '开始上传文件到后端')
+
     const result = await accountsApi.importFiles(formData, (progress) => {
-      importProgress.value = Math.round(progress * 100)
+      const pct = Math.round(progress * 100)
+      importProgress.value = pct
+      // 每 10% 记录一次，避免日志过多
+      if (pct % 10 === 0) {
+        logger.task('导入', `上传进度: ${pct}%`)
+      }
     })
 
-    importResults.value = result.results || []
+    // 后端返回 { success, failed, details }
+    importResults.value = result.details || []
     importProgress.value = 100
     importStatus.value = 'success'
     importProgressText.value = `导入完成！成功 ${successCount.value} 个，失败 ${failCount.value} 个`
+
+    logger.taskSuccess('导入', '后端处理完成', {
+      success: result.success,
+      failed: result.failed,
+      details: result.details,
+    })
 
     setTimeout(() => {
       showProgress.value = false
     }, 2000)
 
     ElMessage.success(`成功导入 ${successCount.value} 个账号`)
+
+    if (successCount.value > 0) {
+      logger.taskSuccess('导入', `成功导入 ${successCount.value} 个账号`)
+    }
   } catch (err) {
     importStatus.value = 'exception'
     importProgressText.value = '导入失败：' + (err.message || '未知错误')
+    logger.taskError('导入', '导入失败', err.message)
     ElMessage.error('导入失败')
   } finally {
     importing.value = false
@@ -329,17 +375,25 @@ async function importSession() {
   }
 
   importing.value = true
+  logger.task('导入', 'Session 字符串导入开始', { phone: sessionForm.value.phone || '未填写' })
   try {
     const result = await accountsApi.importSession(sessionForm.value)
-    ElMessage.success('Session 导入成功')
-    importResults.value.unshift({
-      filename: 'Session 字符串',
-      phone: sessionForm.value.phone,
-      success: true,
-      message: '导入成功',
-    })
-    sessionForm.value = { session_string: '', phone: '', api_id: '', api_hash: '' }
+    if (result.success) {
+      logger.taskSuccess('导入', 'Session 导入成功', result.account)
+      ElMessage.success('Session 导入成功')
+      importResults.value.unshift({
+        filename: 'Session 字符串',
+        phone: sessionForm.value.phone,
+        success: true,
+        message: '导入成功',
+      })
+      sessionForm.value = { session_string: '', phone: '', api_id: '', api_hash: '' }
+    } else {
+      logger.taskError('导入', 'Session 导入失败', result.message)
+      ElMessage.error(result.message || '导入失败')
+    }
   } catch (err) {
+    logger.taskError('导入', 'Session 导入异常', err.message)
     ElMessage.error('导入失败：' + err.message)
   } finally {
     importing.value = false
@@ -373,6 +427,7 @@ async function addManual() {
 
 // 下载模板
 function downloadTemplate() {
+  logger.task('导入', '下载模板')
   const template = {
     phone: '+1234567890',
     api_id: 12345,
@@ -385,6 +440,7 @@ function downloadTemplate() {
   a.download = 'account_template.json'
   a.click()
   URL.revokeObjectURL(url)
+  ElMessage.success('模板已下载')
 }
 </script>
 
