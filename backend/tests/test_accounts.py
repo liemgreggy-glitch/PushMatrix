@@ -1,5 +1,9 @@
 """Tests for the accounts API."""
+import json
+import os
+import tempfile
 import pytest
+from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -287,3 +291,113 @@ def test_check_restriction_fields_in_account_response(client):
     # restriction_status and restriction_checked_at should be present in to_dict output
     assert "restriction_status" in updated
     assert "restriction_checked_at" in updated
+
+
+# ==================== Session folder persistence ====================
+
+def test_import_session_saves_to_session_folder(client):
+    """Importing a session string persists a session file on disk."""
+    with patch("api.accounts.session_manager") as mock_sm:
+        response = client.post(
+            "/api/accounts/import/session",
+            json={"session_string": "test_session_string", "phone": "+9876543210"},
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    mock_sm.save_session_from_string.assert_called_once()
+    call_args = mock_sm.save_session_from_string.call_args
+    # First positional arg is the account object, second is the session string
+    assert call_args[0][1] == "test_session_string"
+
+
+def test_import_session_no_phone_saves_to_session_folder(client):
+    """Importing a session string without a phone also saves to the session folder."""
+    with patch("api.accounts.session_manager") as mock_sm:
+        response = client.post(
+            "/api/accounts/import/session",
+            json={"session_string": "some_session_data"},
+        )
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    mock_sm.save_session_from_string.assert_called_once()
+
+
+def test_import_json_config_saves_to_session_folder(client):
+    """Importing a JSON config file saves a JSON config in the sessions folder."""
+    import io
+    import zipfile
+
+    # Build a ZIP containing a JSON config
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        config = json.dumps({"phone": "+1112223333", "username": "testuser"})
+        zf.writestr("+1112223333.json", config)
+    buf.seek(0)
+
+    with patch("api.accounts.session_manager") as mock_sm:
+        response = client.post(
+            "/api/accounts/import/files",
+            files=[("files", ("+1112223333.zip", buf, "application/zip"))],
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] == 1
+    mock_sm.save_json_config_only.assert_called_once()
+
+
+def test_session_manager_save_json_config_only_writes_file():
+    """save_json_config_only writes a JSON file in the correct sessions sub-folder."""
+    from core.session_manager import SessionManager
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sm = SessionManager(base_dir=tmp)
+
+        account = MagicMock()
+        account.phone = "+9998887777"
+        account.restriction_status = None
+        account.api_id = 12345
+        account.api_hash = "abc"
+        account.two_fa = None
+        account.telegram_id = None
+        account.username = "user1"
+        account.first_name = "First"
+        account.last_name = "Last"
+        account.is_banned = False
+        account.last_used_at = None
+        account.created_at = None
+        account.restriction_checked_at = None
+
+        sm.save_json_config_only(account)
+
+        expected = os.path.join(tmp, "未检查", "+9998887777.json")
+        assert os.path.exists(expected), "JSON config file should be written to the sessions folder"
+        with open(expected) as f:
+            data = json.load(f)
+        assert data["phone"] == "+9998887777"
+
+
+def test_session_manager_save_session_from_string_falls_back_gracefully():
+    """save_session_from_string does not raise on an invalid session string."""
+    from core.session_manager import SessionManager
+
+    with tempfile.TemporaryDirectory() as tmp:
+        sm = SessionManager(base_dir=tmp)
+
+        account = MagicMock()
+        account.phone = "+9998887777"
+        account.restriction_status = None
+        account.api_id = 12345
+        account.api_hash = "abc"
+        account.two_fa = None
+        account.telegram_id = None
+        account.username = "user1"
+        account.first_name = "First"
+        account.last_name = "Last"
+        account.is_banned = False
+        account.last_used_at = None
+        account.created_at = None
+        account.restriction_checked_at = None
+
+        # Should not raise even for invalid session strings
+        sm.save_session_from_string(account, "not_a_real_session_string")

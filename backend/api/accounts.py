@@ -16,6 +16,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from config import settings as app_settings
+from core.session_manager import session_manager
 from database.connection import get_db
 from models.account import Account
 from utils.phone_parser import get_country_from_phone, parse_2fa_from_json
@@ -311,9 +312,12 @@ async def delete_account(account_id: int, db: Session = Depends(get_db)):
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
 
+    phone = account.phone
+    restriction_status = account.restriction_status
     db.delete(account)
     db.commit()
-    return {"success": True, "message": f"账号 {account.phone} 已删除"}
+    session_manager.delete_session(phone, restriction_status)
+    return {"success": True, "message": f"账号 {phone} 已删除"}
 
 
 # ==================== Bulk Operations ====================
@@ -376,11 +380,14 @@ async def bulk_delete(data: BulkDeleteRequest, db: Session = Depends(get_db)):
     accounts = db.query(Account).filter(Account.id.in_(data.account_ids)).all()
     if not accounts:
         raise HTTPException(status_code=404, detail="未找到指定账号")
+    to_delete = [(acc.phone, acc.restriction_status) for acc in accounts]
     deleted = 0
     for account in accounts:
         db.delete(account)
         deleted += 1
     db.commit()
+    for phone, restriction_status in to_delete:
+        session_manager.delete_session(phone, restriction_status)
     return {"success": True, "deleted": deleted, "message": f"已删除 {deleted} 个账号"}
 
 
@@ -477,6 +484,8 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="账号不存在")
+
+    old_restriction_status = account.restriction_status
 
     if not account.session_string:
         return {
@@ -702,6 +711,12 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         if client and client.is_connected():
             await client.disconnect()
             _log_plain(f"{phone} → 已断开连接")
+        # 更新 session 文件夹（状态变化时移动文件）
+        new_restriction_status = account.restriction_status
+        if new_restriction_status != old_restriction_status:
+            session_manager.move_session(phone, old_restriction_status, new_restriction_status, account)
+        else:
+            session_manager.update_config(account)
 
 
 @router.post("/bulk/set-2fa")
@@ -817,6 +832,9 @@ async def import_session(data: ImportSessionRequest, db: Session = Depends(get_d
         db.commit()
         db.refresh(account)
 
+        # Persist session to the sessions/ folder on disk
+        session_manager.save_session_from_string(account, data.session_string)
+
         return {"success": True, "message": "导入成功", "account": account.to_dict()}
     except Exception as e:
         return {"success": False, "message": str(e)}
@@ -825,21 +843,73 @@ async def import_session(data: ImportSessionRequest, db: Session = Depends(get_d
 # ==================== Helper Functions ====================
 
 async def _process_extracted_files(directory: str, db: Session) -> Dict[str, Any]:
+    """Recursively process all .session and standalone .json files in a directory tree."""
     results: Dict[str, Any] = {"success": 0, "failed": 0, "details": []}
-    for fname in os.listdir(directory):
-        if not fname.endswith(".session"):
-            continue
-        detail = await _process_session_file(os.path.join(directory, fname), fname, db)
-        if detail["success"]:
-            results["success"] += 1
-        else:
-            results["failed"] += 1
-        results["details"].append(detail)
+    processed_json: set = set()  # track JSON files that paired with a .session
+
+    for root, _dirs, files in os.walk(directory):
+        for filename in files:
+            # Skip hidden / system files
+            if filename.startswith('.') or filename.startswith('__'):
+                continue
+
+            file_path = os.path.join(root, filename)
+
+            if filename.lower().endswith(".session"):
+                # Look for a same-name JSON config in the same directory
+                json_path = os.path.splitext(file_path)[0] + ".json"
+                json_config = None
+                if os.path.exists(json_path):
+                    try:
+                        with open(json_path, "r", encoding="utf-8") as jf:
+                            json_config = json.load(jf)
+                        processed_json.add(json_path)
+                    except Exception as exc:
+                        logger.warning("读取 JSON 失败 (%s): %s", json_path, exc)
+
+                detail = await _process_session_file(file_path, filename, db, json_config)
+                if detail["success"]:
+                    results["success"] += 1
+                else:
+                    results["failed"] += 1
+                results["details"].append(detail)
+
+            elif filename.lower().endswith(".json"):
+                # Process standalone JSON files (no paired .session)
+                session_path = os.path.splitext(file_path)[0] + ".session"
+                if not os.path.exists(session_path) and file_path not in processed_json:
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as jf:
+                            config = json.load(jf)
+                        detail = _create_account_from_config(config, db)
+                        if detail["success"]:
+                            results["success"] += 1
+                        else:
+                            results["failed"] += 1
+                        results["details"].append(detail)
+                    except Exception as exc:
+                        results["failed"] += 1
+                        results["details"].append({
+                            "filename": filename,
+                            "phone": "",
+                            "success": False,
+                            "message": f"JSON 解析失败: {str(exc)}",
+                        })
+
     return results
 
 
-async def _process_session_file(file_path: str, filename: str, db: Session) -> dict:
-    """Process a .session file and convert to StringSession format."""
+async def _process_session_file(
+    file_path: str,
+    filename: str,
+    db: Session,
+    json_config: Optional[dict] = None,
+) -> dict:
+    """Process a .session file and convert to StringSession format.
+
+    If *json_config* is provided the JSON values take precedence over the
+    Telegram-fetched values for username and 2FA password.
+    """
     phone = ""
     try:
         from telethon.sessions import StringSession, SQLiteSession
@@ -880,14 +950,22 @@ async def _process_session_file(file_path: str, filename: str, db: Session) -> d
         # Fetch account details from Telegram
         account_details = await _fetch_account_details(string_session, phone)
 
+        # Merge: JSON config takes precedence over Telegram-fetched values
+        username = (json_config or {}).get("username") or account_details.get("username")
+        first_name = (json_config or {}).get("first_name") or account_details.get("first_name")
+        last_name = (json_config or {}).get("last_name") or account_details.get("last_name")
+        two_fa = parse_2fa_from_json(json_config) if json_config else None
+        two_fa = two_fa or account_details.get("two_fa_password")
+
         account = Account(
             phone=phone,
             session_string=string_session,
-            username=account_details.get('username'),
-            first_name=account_details.get('first_name'),
-            last_name=account_details.get('last_name'),
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
             telegram_id=account_details.get('telegram_id'),
-            two_fa_enabled=account_details.get('two_fa_enabled', False),
+            two_fa=two_fa,
+            two_fa_enabled=bool(two_fa) or account_details.get('two_fa_enabled', False),
             registered_months=account_details.get('registered_months'),
             country=country_name,
             country_flag=country_flag,
@@ -896,6 +974,14 @@ async def _process_session_file(file_path: str, filename: str, db: Session) -> d
         db.add(account)
         db.commit()
         db.refresh(account)
+
+        # Persist session file to managed sessions/ directory
+        try:
+            with open(file_path, "rb") as sf:
+                session_bytes = sf.read()
+            session_manager.save_session(account, session_bytes)
+        except Exception as exc:
+            logger.warning("保存 session 文件失败 (%s): %s", phone, exc)
 
         return {
             "filename": filename,
@@ -911,6 +997,37 @@ async def _process_session_file(file_path: str, filename: str, db: Session) -> d
             "success": False,
             "message": f"Session 转换失败: {str(e)}",
         }
+
+
+async def _calculate_registration_time(client) -> Optional[int]:
+    """Estimate account registration age (months) from earliest known conversations.
+
+    Tries messaging official Telegram accounts/bots for their oldest message
+    date.  Returns the number of months since that date, or None if no data
+    is found.
+    """
+    try:
+        earliest_date = None
+
+        for entity in ('telegram', 'SpamBot', '777000'):
+            try:
+                async for message in client.iter_messages(entity, limit=1, reverse=True):
+                    if message.date:
+                        if earliest_date is None or message.date < earliest_date:
+                            earliest_date = message.date
+                        break
+            except Exception:
+                continue
+
+        if earliest_date:
+            now = datetime.now(earliest_date.tzinfo)
+            delta = now - earliest_date
+            months = delta.days // 30
+            return max(1, months)
+
+        return None
+    except Exception:
+        return None
 
 
 async def _fetch_account_details(session_string: str, phone: str) -> dict:
@@ -943,12 +1060,10 @@ async def _fetch_account_details(session_string: str, phone: str) -> dict:
 
             me = await client.get_me()
 
-            # Rough account age estimation: Telegram IDs increase over time
-            # (approximately 1 million new users per month in early years).
-            # This is a very coarse estimate and may be far from accurate.
-            registered_months = None
-            if me and me.id:
-                registered_months = max(1, me.id // 1_000_000)
+            # Try to estimate registration date from historical conversations.
+            # Fall back to None if that fails (rather than using the inaccurate
+            # ID-based estimate that could produce values in the hundreds).
+            registered_months = await _calculate_registration_time(client)
 
             # Check 2FA status
             two_fa_enabled = False
@@ -1006,6 +1121,9 @@ def _create_account_from_config(config: dict, db: Session) -> dict:
         db.add(account)
         db.commit()
         db.refresh(account)
+
+        # Persist JSON config to the sessions/ folder on disk
+        session_manager.save_json_config_only(account)
 
         return {"phone": phone, "success": True, "message": "导入成功", "id": account.id}
     except Exception as e:

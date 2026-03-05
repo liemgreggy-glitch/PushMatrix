@@ -312,9 +312,19 @@ def parse_2fa_from_json(config: dict) -> Optional[str]:
     """Extract a 2FA password/secret from an account JSON config dict.
 
     Looks for keys: twofa, passwordfa, 2fa, two_fa, password (case-insensitive).
-    Returns the value as a string, or None if not found / empty.
+    Returns the value as a string, or None if not found / empty / "null".
     """
-    for key, value in config.items():
-        if key.lower() in _2FA_FIELD_NAMES and value:
-            return str(value)
+    if not config:
+        return None
+
+    lower_config = {k.lower(): v for k, v in config.items()}
+
+    for key in ("twofa", "two_fa", "passwordfa", "2fa", "password"):
+        value = lower_config.get(key)
+        if value is None:
+            continue
+        str_value = str(value).strip()
+        if str_value and str_value.lower() != "null":
+            return str_value
+
     return None

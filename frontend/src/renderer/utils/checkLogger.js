@@ -17,12 +17,12 @@ const ANSI = {
 
 // CSS 颜色（用于浏览器 / Electron 渲染进程控制台）
 const CSS = {
-  white: 'color: #d1d5db',
-  green: 'color: #10b981',
-  yellow: 'color: #f59e0b',
-  blue: 'color: #38bdf8',
-  red: 'color: #ef4444',
-  pink: 'color: #ec4899',
+  white: 'color: #d1d5db; font-weight: bold;',
+  green: 'color: #10b981; font-weight: bold;',
+  yellow: 'color: #f59e0b; font-weight: bold;',
+  blue: 'color: #38bdf8; font-weight: bold;',
+  red: 'color: #ef4444; font-weight: bold;',
+  pink: 'color: #ec4899; font-weight: bold;',
 }
 
 // 状态 → 样式映射
