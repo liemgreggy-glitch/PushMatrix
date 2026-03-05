@@ -348,7 +348,37 @@ async function processFiles(files) {
   importResults.value = []
   importStatus.value = ''
 
-  // Split into batches of 10 files each
+  if (isElectron.value) {
+    // Electron: write files directly to local sessions/未检查/ folder
+    importProgressText.value = `正在导入 ${supportedFiles.length} 个文件到本地...`
+    try {
+      const fileList = []
+      for (const file of supportedFiles) {
+        const buffer = await readFileAsArrayBuffer(file)
+        fileList.push({ name: file.name, buffer: Array.from(new Uint8Array(buffer)) })
+      }
+      const result = await window.electron.ipcRenderer.invoke('import-files-locally', { fileList })
+      importResults.value = result.details || []
+      importProgress.value = 100
+      importStatus.value = result.success > 0 ? 'success' : 'exception'
+      importProgressText.value = `导入完成！成功 ${result.success} 个，失败 ${result.failed} 个`
+      if (result.success > 0) {
+        setTimeout(() => { showProgress.value = false }, 2000)
+        ElMessage.success(`成功导入 ${result.success} 个账号到本地`)
+      } else {
+        ElMessage.error('全部导入失败！请检查文件格式')
+      }
+    } catch (err) {
+      importStatus.value = 'exception'
+      importProgressText.value = '导入失败：' + (err.message || '未知错误')
+      ElMessage.error('导入失败')
+    } finally {
+      importing.value = false
+    }
+    return
+  }
+
+  // Non-Electron: upload to backend server in batches
   const batchSize = 10
   const batches = []
   for (let i = 0; i < supportedFiles.length; i += batchSize) {
@@ -521,37 +551,66 @@ async function importSession() {
   importing.value = true
   logger.task('导入', 'Session 字符串导入开始', { phone: sessionForm.value.phone || '未填写' })
   try {
-    // 空字符串转 null，避免后端 Pydantic 因 api_id="" 产生 422 错误
-    const rawApiId = parseInt(sessionForm.value.api_id, 10)
-    const payload = {
-      session_string: sessionForm.value.session_string,
-      phone: sessionForm.value.phone || '',
-      api_id: sessionForm.value.api_id && !isNaN(rawApiId) ? rawApiId : null,
-      api_hash: sessionForm.value.api_hash || null,
-    }
-    const result = await accountsApi.importSession(payload)
-    if (result.success) {
-      logger.taskSuccess('导入', 'Session 导入成功', result.account)
-      ElMessage.success('Session 导入成功')
-      importResults.value.unshift({
-        filename: 'Session 字符串',
-        phone: sessionForm.value.phone,
-        success: true,
-        message: '导入成功',
-      })
-      // Save to local sessions directory
-      if (isElectron.value && result.account) {
-        try {
-          const fullAccount = await accountsApi.getOne(result.account.id)
-          await window.electron.ipcRenderer.invoke('save-session-to-local', { account: fullAccount })
-        } catch (err) {
-          console.error('保存本地 session 失败:', err)
-        }
+    if (isElectron.value) {
+      // Electron: write config + session string directly to local sessions/未检查/
+      const phone = sessionForm.value.phone || `session_${Date.now()}`
+      const config = {
+        phone,
+        app_id: sessionForm.value.api_id ? parseInt(sessionForm.value.api_id, 10) : null,
+        app_hash: sessionForm.value.api_hash || null,
+        twoFA: null,
+        spamblock: 'unknown',
+        session_file: phone,
+        session_created_date: new Date().toISOString(),
       }
-      sessionForm.value = { session_string: '', phone: '', api_id: '', api_hash: '' }
+      const fileList = [
+        { name: `${phone}.json`, buffer: Array.from(new TextEncoder().encode(JSON.stringify(config, null, 2))) },
+        { name: `${phone}.session`, buffer: Array.from(new TextEncoder().encode(sessionForm.value.session_string)) },
+      ]
+      const result = await window.electron.ipcRenderer.invoke('import-files-locally', { fileList })
+      if (result.success > 0) {
+        logger.taskSuccess('导入', 'Session 导入成功（本地）', { phone })
+        ElMessage.success('Session 导入成功')
+        importResults.value.unshift({ filename: 'Session 字符串', phone, success: true, message: '导入成功' })
+        sessionForm.value = { session_string: '', phone: '', api_id: '', api_hash: '' }
+      } else {
+        const msg = result.details?.[0]?.message || '导入失败'
+        logger.taskError('导入', 'Session 导入失败（本地）', msg)
+        ElMessage.error(msg)
+      }
     } else {
-      logger.taskError('导入', 'Session 导入失败', result.message)
-      ElMessage.error(result.message || '导入失败')
+      // Non-Electron: use backend API
+      const rawApiId = parseInt(sessionForm.value.api_id, 10)
+      const payload = {
+        session_string: sessionForm.value.session_string,
+        phone: sessionForm.value.phone || '',
+        api_id: sessionForm.value.api_id && !isNaN(rawApiId) ? rawApiId : null,
+        api_hash: sessionForm.value.api_hash || null,
+      }
+      const result = await accountsApi.importSession(payload)
+      if (result.success) {
+        logger.taskSuccess('导入', 'Session 导入成功', result.account)
+        ElMessage.success('Session 导入成功')
+        importResults.value.unshift({
+          filename: 'Session 字符串',
+          phone: sessionForm.value.phone,
+          success: true,
+          message: '导入成功',
+        })
+        // Save to local sessions directory
+        if (isElectron.value && result.account) {
+          try {
+            const fullAccount = await accountsApi.getOne(result.account.id)
+            await window.electron.ipcRenderer.invoke('save-session-to-local', { account: fullAccount })
+          } catch (err) {
+            console.error('保存本地 session 失败:', err)
+          }
+        }
+        sessionForm.value = { session_string: '', phone: '', api_id: '', api_hash: '' }
+      } else {
+        logger.taskError('导入', 'Session 导入失败', result.message)
+        ElMessage.error(result.message || '导入失败')
+      }
     }
   } catch (err) {
     logger.taskError('导入', 'Session 导入异常', err.message)

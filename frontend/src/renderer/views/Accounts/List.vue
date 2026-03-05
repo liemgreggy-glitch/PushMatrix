@@ -251,33 +251,38 @@ async function handleBatchDelete() {
       '批量删除确认',
       { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' }
     )
-    const ids = selectedAccounts.value.map(a => a.id)
-    const result = await accountsApi.bulkDelete({ account_ids: ids })
 
-    // Delete local session files for each deleted account
     if (isElectron.value) {
-      let localDeleteFailed = 0
+      // Electron: delete local files only; the fs.watch listener will trigger a list refresh
+      let deletedCount = 0
+      let failedCount = 0
       for (const account of selectedAccounts.value) {
         try {
           await window.electron.ipcRenderer.invoke('delete-session', {
             phone: account.phone,
             restrictionStatus: account.restriction_status,
           })
+          deletedCount++
         } catch (err) {
-          localDeleteFailed++
+          failedCount++
           console.error(`删除本地文件失败 (${account.phone}):`, err)
         }
       }
-      if (localDeleteFailed > 0) {
-        ElMessage.warning(`${localDeleteFailed} 个账号的本地文件删除失败，请手动清理 sessions 目录`)
+      if (failedCount > 0) {
+        ElMessage.warning(`${failedCount} 个账号删除失败`)
+      } else {
+        ElMessage.success(`已删除 ${deletedCount} 个账号`)
       }
+    } else {
+      // Non-Electron: call server API
+      const ids = selectedAccounts.value.map(a => a.id)
+      const result = await accountsApi.bulkDelete({ account_ids: ids })
+      ElMessage.success(`已删除 ${result.deleted} 个账号`)
+      await loadAccounts()
     }
-
-    ElMessage.success(`已删除 ${result.deleted} 个账号`)
-    await loadAccounts()
   } catch (err) {
     if (err !== 'cancel') {
-      ElMessage.error('删除失败: ' + err.message)
+      ElMessage.error('删除失败: ' + (err.message || '未知错误'))
     }
   }
 }
@@ -413,18 +418,38 @@ async function handleAction(command, actionAccounts) {
 async function loadAccounts() {
   loading.value = true
   try {
-    const data = await accountsApi.getList()
-    accounts.value = data.items || data.accounts || (Array.isArray(data) ? data : [])
-    const s = data.stats
-    if (s) {
+    if (isElectron.value) {
+      // Electron: read account list directly from local session files
+      const localAccounts = await window.electron.ipcRenderer.invoke('scan-local-accounts')
+      accounts.value = localAccounts
+      // Recalculate statistics
+      const s = { total: 0, idle: 0, unlimited: 0, spam: 0, frozen: 0, banned: 0, disconnected: 0 }
+      s.total = localAccounts.length
+      for (const acc of localAccounts) {
+        const rs = acc.restriction_status
+        if (rs === 'UNRESTRICTED') s.unlimited++
+        else if (rs === 'SPAM' || rs === 'SPAM_PERMANENT' || rs === 'SPAM_TEMP') s.spam++
+        else if (rs === 'FROZEN') s.frozen++
+        else if (rs === 'BANNED') s.banned++
+        else if (rs === null) s.idle++
+        else s.disconnected++
+      }
       stats.value.forEach(stat => {
-        if (stat.key in s) {
-          stat.value = s[stat.key]
-        }
+        if (stat.key in s) stat.value = s[stat.key]
       })
+    } else {
+      // Non-Electron: use server API
+      const data = await accountsApi.getList()
+      accounts.value = data.items || data.accounts || (Array.isArray(data) ? data : [])
+      const s = data.stats
+      if (s) {
+        stats.value.forEach(stat => {
+          if (stat.key in s) stat.value = s[stat.key]
+        })
+      }
     }
   } catch (err) {
-    ElMessage.error('加载账号列表失败')
+    ElMessage.error('加载账号列表失败: ' + err.message)
   } finally {
     loading.value = false
   }
@@ -435,8 +460,13 @@ onMounted(async () => {
   if (isElectron.value) {
     try {
       sessionsDir.value = await window.electron.ipcRenderer.invoke('get-sessions-dir')
+      // Watch sessions folder and auto-refresh when files change
+      await window.electron.ipcRenderer.invoke('watch-sessions')
+      window.electron.ipcRenderer.on('sessions-changed', () => {
+        loadAccounts()
+      })
     } catch (err) {
-      console.error('获取 sessions 目录失败:', err)
+      console.error('初始化失败:', err)
     }
   }
 })

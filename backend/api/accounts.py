@@ -432,8 +432,13 @@ async def check_spam_status_single(account_id: int, db: Session = Depends(get_db
             import asyncio
             await asyncio.sleep(3)
 
-            messages = await client.get_messages("@SpamBot", limit=1)
-            reply_text = messages[0].text.lower() if messages else ""
+            messages = await client.get_messages("@SpamBot", limit=5)
+            reply_text = ""
+            for msg in messages:
+                # Only use incoming messages (not the /start we sent)
+                if not msg.out and msg.text:
+                    reply_text = msg.text.lower()
+                    break
 
             if any(k in reply_text for k in ("good news", "no limits", "no complaints")):
                 new_status = "unlimited"
@@ -676,14 +681,23 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
 
         _log_plain(f"{phone} → 授权检查通过")
 
-        # 步骤 4: 联系 @SpamBot
+        # 步骤 4: 联系 @SpamBot（使用低级 API，避免 conversation() 需要更新循环）
         _log_plain(f"{phone} → 正在联系 @SpamBot")
         try:
-            async with client.conversation("SpamBot", timeout=30) as conv:
-                await conv.send_message("/start")
-                _log_plain(f"{phone} → 已发送 /start")
-                resp = await conv.get_response()
-                raw_reply = resp.raw_text  # 使用 raw_text
+            await client.send_message("SpamBot", "/start")
+            _log_plain(f"{phone} → 已发送 /start，等待回复...")
+            await asyncio.sleep(5)
+
+            messages = await client.get_messages("SpamBot", limit=5)
+            raw_reply = ""
+            for msg in messages:
+                # 只取 SpamBot 发来的消息（非自己发的）
+                if not msg.out and msg.text:
+                    raw_reply = getattr(msg, "raw_text", None) or msg.text
+                    break
+
+            if not raw_reply:
+                _log_plain(f"{phone} → 未收到 SpamBot 回复")
 
             _log_plain(f"{phone} → 收到回复 ({len(raw_reply)} 字符)")
 
