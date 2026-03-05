@@ -832,6 +832,9 @@ async def import_session(data: ImportSessionRequest, db: Session = Depends(get_d
         db.commit()
         db.refresh(account)
 
+        # Persist session to the sessions/ folder on disk
+        session_manager.save_session_from_string(account, data.session_string)
+
         return {"success": True, "message": "导入成功", "account": account.to_dict()}
     except Exception as e:
         return {"success": False, "message": str(e)}
@@ -1118,6 +1121,9 @@ def _create_account_from_config(config: dict, db: Session) -> dict:
         db.add(account)
         db.commit()
         db.refresh(account)
+
+        # Persist JSON config to the sessions/ folder on disk
+        session_manager.save_json_config_only(account)
 
         return {"phone": phone, "success": True, "message": "导入成功", "id": account.id}
     except Exception as e:

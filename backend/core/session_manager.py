@@ -5,7 +5,9 @@ account restriction status under a top-level ``sessions/`` directory.
 """
 import json
 import logging
+import os
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -158,6 +160,62 @@ class SessionManager:
                 self.update_config(account)
         except Exception as exc:
             logger.warning("session_manager.move_session failed for %s: %s", phone, exc)
+
+    def save_session_from_string(self, account, session_string: str) -> None:
+        """Convert a Telethon StringSession to SQLite format and save session files.
+
+        Silently logs and swallows errors so that a disk issue never
+        prevents the database import from succeeding.
+        """
+        try:
+            from telethon.sessions import SQLiteSession, StringSession  # type: ignore
+
+            phone = account.phone
+            ss = StringSession(session_string)
+            temp_dir = tempfile.mkdtemp()
+            try:
+                temp_path = os.path.join(temp_dir, os.path.basename(phone))
+                sqlite_session = SQLiteSession(temp_path)
+                if ss.dc_id and ss.server_address and ss.port:
+                    sqlite_session.set_dc(ss.dc_id, ss.server_address, ss.port)
+                if ss.auth_key is not None:
+                    sqlite_session.auth_key = ss.auth_key
+                sqlite_session.save()
+                session_file = temp_path + ".session"
+                if os.path.exists(session_file):
+                    with open(session_file, "rb") as f:
+                        session_bytes = f.read()
+                    self.save_session(account, session_bytes)
+                else:
+                    # No SQLite file produced; fall back to JSON-only
+                    self.save_json_config_only(account)
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as exc:
+            logger.warning(
+                "session_manager.save_session_from_string failed for %s: %s",
+                account.phone,
+                exc,
+            )
+
+    def save_json_config_only(self, account) -> None:
+        """Save only the JSON config file (no .session file).
+
+        Useful for metadata-only imports (e.g. JSON config without a session).
+        Silently logs and swallows errors so that a disk issue never
+        prevents the database import from succeeding.
+        """
+        try:
+            folder = self.get_folder_path(account.restriction_status)
+            config = self._generate_config(account)
+            with open(folder / f"{account.phone}.json", "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.warning(
+                "session_manager.save_json_config_only failed for %s: %s",
+                account.phone,
+                exc,
+            )
 
     def delete_session(
         self, phone: str, restriction_status: Optional[str] = None
