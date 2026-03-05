@@ -1,208 +1,481 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <span class="page-title">批量导入账号</span>
+      <span class="page-title">批量导入</span>
     </div>
 
-    <el-row :gutter="16">
-      <el-col :span="14">
-        <el-card>
-          <template #header><span>选择导入方式</span></template>
+    <div class="import-container">
+      <!-- 左侧：导入方式 -->
+      <div class="import-left">
+        <h3 class="section-title">选择导入方式</h3>
 
-          <el-tabs v-model="importMethod">
-            <el-tab-pane label="文件导入" name="file">
-              <div class="upload-area">
-                <el-upload
-                  drag
-                  action="#"
-                  :auto-upload="false"
-                  :on-change="handleFileChange"
-                  accept=".xlsx,.csv,.txt"
-                >
-                  <el-icon size="40" color="#409EFF"><Upload /></el-icon>
-                  <p class="upload-text">拖拽文件到此处，或点击上传</p>
-                  <p class="upload-hint">支持 Excel (.xlsx)、CSV (.csv)、TXT (.txt) 格式</p>
-                </el-upload>
-              </div>
-            </el-tab-pane>
-
-            <el-tab-pane label="Session 导入" name="session">
-              <el-form label-width="100px">
-                <el-form-item label="Session 字符串">
-                  <el-input
-                    v-model="sessionInput"
-                    type="textarea"
-                    :rows="8"
-                    placeholder="每行一个 Session 字符串"
-                  />
-                </el-form-item>
-              </el-form>
-            </el-tab-pane>
-
-            <el-tab-pane label="手动输入" name="manual">
-              <el-form label-width="100px">
-                <el-form-item label="手机号列表">
-                  <el-input
-                    v-model="phoneInput"
-                    type="textarea"
-                    :rows="8"
-                    placeholder="每行一个手机号，格式: +1234567890"
-                  />
-                </el-form-item>
-              </el-form>
-            </el-tab-pane>
-          </el-tabs>
-
-          <div class="import-actions">
-            <el-button icon="Download" @click="downloadTemplate">下载模板</el-button>
-            <el-button type="primary" icon="Upload" @click="startImport" :loading="importing">
-              开始导入
-            </el-button>
-          </div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="10">
-        <el-card>
-          <template #header><span>导入结果</span></template>
-          <div v-if="!importResult" class="empty-import">
-            <el-empty description="等待导入..." :image-size="80" />
-          </div>
-          <div v-else class="import-result">
-            <div class="result-item success">
-              <el-icon color="#A6E3A1"><CircleCheck /></el-icon>
-              <span>成功: {{ importResult.imported }}</span>
+        <el-tabs v-model="activeTab" class="import-tabs">
+          <!-- 文件导入 -->
+          <el-tab-pane label="文件导入" name="file">
+            <div
+              class="upload-area"
+              :class="{ 'is-dragover': isDragover }"
+              @drop="handleDrop"
+              @dragover="handleDragOver"
+              @dragleave="handleDragLeave"
+              @click="triggerFileSelect"
+            >
+              <el-icon :size="48" color="#409EFF"><Upload /></el-icon>
+              <p class="upload-text">拖拽文件到此处，或点击上传</p>
+              <p class="upload-hint">支持 Session (.session)、压缩包 (.zip, .rar)、文件夹</p>
+              <p class="upload-warning">不支持 Excel (.xlsx)、CSV (.csv)、TXT (.txt) 格式</p>
             </div>
-            <div class="result-item danger">
-              <el-icon color="#F38BA8"><CircleClose /></el-icon>
-              <span>失败: {{ importResult.failed }}</span>
-            </div>
-            <div v-if="importResult.errors?.length" class="error-list">
-              <p class="error-title">错误详情:</p>
-              <div v-for="(err, i) in importResult.errors" :key="i" class="error-item">
-                {{ err }}
-              </div>
-            </div>
-          </div>
-        </el-card>
 
-        <el-card style="margin-top: 16px;">
-          <template #header><span>导入说明</span></template>
-          <ul class="import-tips">
-            <li>Excel/CSV 格式：第一列为手机号，第二列为 Session（可选）</li>
-            <li>TXT 格式：每行一个手机号或 Session</li>
-            <li>手机号格式：+国家代码+号码，如 +8613800138000</li>
-            <li>Session 格式：Pyrogram 或 Telethon Session 字符串</li>
-            <li>批量导入上限：单次最多 500 个账号</li>
-          </ul>
-        </el-card>
-      </el-col>
-    </el-row>
+            <input
+              ref="fileInput"
+              type="file"
+              multiple
+              webkitdirectory
+              directory
+              style="display: none"
+              @change="handleFileSelect"
+            />
+
+            <div class="action-buttons">
+              <el-button @click="triggerFileSelect" icon="FolderOpened">选择文件夹</el-button>
+              <el-button @click="triggerSingleFileSelect" icon="Document">选择文件</el-button>
+              <el-button @click="downloadTemplate" icon="Download">下载模板</el-button>
+            </div>
+
+            <input
+              ref="singleFileInput"
+              type="file"
+              multiple
+              accept=".session,.zip,.rar"
+              style="display: none"
+              @change="handleFileSelect"
+            />
+          </el-tab-pane>
+
+          <!-- Session 导入 -->
+          <el-tab-pane label="Session 导入" name="session">
+            <el-form label-width="100px">
+              <el-form-item label="Session 字符串">
+                <el-input
+                  v-model="sessionForm.session_string"
+                  type="textarea"
+                  :rows="6"
+                  placeholder="粘贴 Pyrogram 或 Telethon Session 字符串"
+                />
+              </el-form-item>
+              <el-form-item label="手机号">
+                <el-input v-model="sessionForm.phone" placeholder="+1234567890" />
+              </el-form-item>
+              <el-form-item label="API ID">
+                <el-input v-model="sessionForm.api_id" placeholder="Telegram API ID" />
+              </el-form-item>
+              <el-form-item label="API Hash">
+                <el-input v-model="sessionForm.api_hash" placeholder="Telegram API Hash" />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="importSession" :loading="importing">
+                  开始导入
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
+
+          <!-- 手动输入 -->
+          <el-tab-pane label="手动输入" name="manual">
+            <el-form label-width="100px">
+              <el-form-item label="手机号" required>
+                <el-input v-model="manualForm.phone" placeholder="+1234567890" />
+              </el-form-item>
+              <el-form-item label="API ID" required>
+                <el-input v-model="manualForm.api_id" placeholder="Telegram API ID" />
+              </el-form-item>
+              <el-form-item label="API Hash" required>
+                <el-input v-model="manualForm.api_hash" placeholder="Telegram API Hash" />
+              </el-form-item>
+              <el-form-item label="代理">
+                <el-select v-model="manualForm.proxy_id" clearable placeholder="选择代理（可选）" style="width: 100%">
+                  <el-option label="无代理" :value="null" />
+                </el-select>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" @click="addManual" :loading="importing">
+                  添加账号
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+
+      <!-- 右侧：导入结果 -->
+      <div class="import-right">
+        <h3 class="section-title">导入结果</h3>
+
+        <div v-if="importResults.length === 0" class="empty-result">
+          <el-icon :size="64" color="#909399"><Box /></el-icon>
+          <p>等待导入...</p>
+        </div>
+
+        <div v-else class="result-list">
+          <div class="result-summary">
+            <el-tag type="success">成功: {{ successCount }}</el-tag>
+            <el-tag type="danger">失败: {{ failCount }}</el-tag>
+            <el-tag type="info">总计: {{ importResults.length }}</el-tag>
+          </div>
+
+          <el-table :data="importResults" max-height="400">
+            <el-table-column label="文件名" prop="filename" width="200" />
+            <el-table-column label="手机号" prop="phone" width="150" />
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag v-if="row.success" type="success" size="small">成功</el-tag>
+                <el-tag v-else type="danger" size="small">失败</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="信息" prop="message" />
+          </el-table>
+        </div>
+
+        <h3 class="section-title" style="margin-top: 24px">导入说明</h3>
+        <ul class="import-instructions">
+          <li>Session 格式：Pyrogram 或 Telethon Session 字符串</li>
+          <li>压缩包格式：ZIP 或 RAR，内含 .session 文件和对应的 .json 配置</li>
+          <li>JSON 配置示例：<code>{"phone": "+1234567890", "api_id": 12345, "api_hash": "xxx"}</code></li>
+          <li>如果只有 .session 文件，系统会自动生成默认配置</li>
+          <li>批量导入上限：单次最多 500 个账号</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 导入进度对话框 -->
+    <el-dialog v-model="showProgress" title="正在导入" width="400px" :close-on-click-modal="false" :close-on-press-escape="false">
+      <el-progress :percentage="importProgress" :status="importStatus" />
+      <p style="text-align: center; margin-top: 16px">
+        {{ importProgressText }}
+      </p>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { accountsApi } from '../../api/index.js'
 
-const importMethod = ref('file')
-const sessionInput = ref('')
-const phoneInput = ref('')
+const activeTab = ref('file')
+const isDragover = ref(false)
 const importing = ref(false)
-const importResult = ref(null)
-const selectedFile = ref(null)
+const showProgress = ref(false)
+const importProgress = ref(0)
+const importStatus = ref('')
+const importProgressText = ref('')
+const importResults = ref([])
 
-function handleFileChange(file) {
-  selectedFile.value = file.raw
+const fileInput = ref(null)
+const singleFileInput = ref(null)
+
+const sessionForm = ref({
+  session_string: '',
+  phone: '',
+  api_id: '',
+  api_hash: '',
+})
+
+const manualForm = ref({
+  phone: '',
+  api_id: '',
+  api_hash: '',
+  proxy_id: null,
+})
+
+const successCount = computed(() => importResults.value.filter(r => r.success).length)
+const failCount = computed(() => importResults.value.filter(r => !r.success).length)
+
+// 拖拽事件
+function handleDragOver(e) {
+  e.preventDefault()
+  isDragover.value = true
 }
 
-async function startImport() {
-  importing.value = true
-  try {
-    let result
-    if (importMethod.value === 'file' && selectedFile.value) {
-      const formData = new FormData()
-      formData.append('file', selectedFile.value)
-      result = await accountsApi.import(formData)
-    } else {
-      // TODO: handle session/manual import
-      result = { imported: 0, failed: 0 }
+function handleDragLeave(e) {
+  e.preventDefault()
+  isDragover.value = false
+}
+
+async function handleDrop(e) {
+  e.preventDefault()
+  isDragover.value = false
+
+  const items = e.dataTransfer.items
+  const files = []
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.kind === 'file') {
+      const entry = item.webkitGetAsEntry()
+      if (entry) {
+        await processEntry(entry, files)
+      }
     }
-    importResult.value = result
-    ElMessage.success(`导入完成：成功 ${result.imported} 个`)
+  }
+
+  if (files.length > 0) {
+    await processFiles(files)
+  }
+}
+
+// 递归处理文件夹
+async function processEntry(entry, files) {
+  if (entry.isFile) {
+    const file = await new Promise((resolve) => entry.file(resolve))
+    files.push(file)
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader()
+    const entries = await new Promise((resolve) => reader.readEntries(resolve))
+    for (const subEntry of entries) {
+      await processEntry(subEntry, files)
+    }
+  }
+}
+
+// 触发文件夹选择
+function triggerFileSelect() {
+  fileInput.value.click()
+}
+
+// 触发单文件选择
+function triggerSingleFileSelect() {
+  singleFileInput.value.click()
+}
+
+// 文件选择
+async function handleFileSelect(e) {
+  const files = Array.from(e.target.files)
+  if (files.length > 0) {
+    await processFiles(files)
+  }
+  e.target.value = '' // 清空，允许重复选择
+}
+
+// 处理文件
+async function processFiles(files) {
+  // 过滤不支持的格式
+  const unsupportedFiles = files.filter(f => {
+    const ext = f.name.toLowerCase().split('.').pop()
+    return ['xlsx', 'csv', 'txt'].includes(ext)
+  })
+
+  if (unsupportedFiles.length > 0) {
+    ElMessage.warning(`不支持的格式：${unsupportedFiles.map(f => f.name).join(', ')}`)
+  }
+
+  // 筛选支持的文件
+  const supportedFiles = files.filter(f => {
+    const ext = f.name.toLowerCase().split('.').pop()
+    return ['session', 'zip', 'rar', 'json'].includes(ext)
+  })
+
+  if (supportedFiles.length === 0) {
+    ElMessage.error('没有可导入的文件')
+    return
+  }
+
+  if (supportedFiles.length > 500) {
+    ElMessage.error('单次最多导入 500 个文件')
+    return
+  }
+
+  // 开始导入
+  importing.value = true
+  showProgress.value = true
+  importProgress.value = 0
+  importResults.value = []
+
+  const formData = new FormData()
+  supportedFiles.forEach(file => {
+    formData.append('files', file)
+  })
+
+  try {
+    importProgressText.value = '正在上传文件...'
+    const result = await accountsApi.importFiles(formData, (progress) => {
+      importProgress.value = Math.round(progress * 100)
+    })
+
+    importResults.value = result.results || []
+    importProgress.value = 100
+    importStatus.value = 'success'
+    importProgressText.value = `导入完成！成功 ${successCount.value} 个，失败 ${failCount.value} 个`
+
+    setTimeout(() => {
+      showProgress.value = false
+    }, 2000)
+
+    ElMessage.success(`成功导入 ${successCount.value} 个账号`)
   } catch (err) {
-    ElMessage.error('导入失败: ' + err.message)
+    importStatus.value = 'exception'
+    importProgressText.value = '导入失败：' + (err.message || '未知错误')
+    ElMessage.error('导入失败')
   } finally {
     importing.value = false
   }
 }
 
+// Session 导入
+async function importSession() {
+  if (!sessionForm.value.session_string) {
+    ElMessage.warning('请输入 Session 字符串')
+    return
+  }
+
+  importing.value = true
+  try {
+    const result = await accountsApi.importSession(sessionForm.value)
+    ElMessage.success('Session 导入成功')
+    importResults.value.unshift({
+      filename: 'Session 字符串',
+      phone: sessionForm.value.phone,
+      success: true,
+      message: '导入成功',
+    })
+    sessionForm.value = { session_string: '', phone: '', api_id: '', api_hash: '' }
+  } catch (err) {
+    ElMessage.error('导入失败：' + err.message)
+  } finally {
+    importing.value = false
+  }
+}
+
+// 手动添加
+async function addManual() {
+  if (!manualForm.value.phone || !manualForm.value.api_id || !manualForm.value.api_hash) {
+    ElMessage.warning('请填写完整信息')
+    return
+  }
+
+  importing.value = true
+  try {
+    await accountsApi.create(manualForm.value)
+    ElMessage.success('账号已添加')
+    importResults.value.unshift({
+      filename: '手动输入',
+      phone: manualForm.value.phone,
+      success: true,
+      message: '添加成功',
+    })
+    manualForm.value = { phone: '', api_id: '', api_hash: '', proxy_id: null }
+  } catch (err) {
+    ElMessage.error('添加失败：' + err.message)
+  } finally {
+    importing.value = false
+  }
+}
+
+// 下载模板
 function downloadTemplate() {
-  ElMessage.info('模板下载功能即将可用')
+  const template = {
+    phone: '+1234567890',
+    api_id: 12345,
+    api_hash: 'your_api_hash_here',
+  }
+  const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'account_template.json'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 </script>
 
 <style scoped>
+.import-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.import-left,
+.import-right {
+  background: #252938;
+  border-radius: 8px;
+  padding: 24px;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--color-text);
+}
+
 .upload-area {
-  margin-bottom: 20px;
+  border: 2px dashed #4a5568;
+  border-radius: 8px;
+  padding: 48px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  background: #1e2330;
+}
+
+.upload-area:hover,
+.upload-area.is-dragover {
+  border-color: #409eff;
+  background: #252938;
 }
 
 .upload-text {
-  font-size: 14px;
+  font-size: 16px;
+  margin: 16px 0 8px;
   color: var(--color-text);
-  margin-top: 8px;
 }
 
 .upload-hint {
-  font-size: 12px;
-  color: var(--color-text-muted);
+  font-size: 14px;
+  color: #909399;
+  margin: 4px 0;
 }
 
-.import-actions {
+.upload-warning {
+  font-size: 12px;
+  color: #f56c6c;
+  margin-top: 8px;
+}
+
+.action-buttons {
   display: flex;
-  justify-content: flex-end;
-  gap: 10px;
+  gap: 12px;
   margin-top: 16px;
 }
 
-.result-item {
+.empty-result {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  font-size: 16px;
-  margin-bottom: 12px;
-}
-
-.error-list {
-  margin-top: 12px;
-  padding: 12px;
-  background-color: var(--color-bg);
-  border-radius: var(--border-radius);
-}
-
-.error-title {
-  font-size: 13px;
-  color: var(--color-text-muted);
-  margin-bottom: 8px;
-}
-
-.error-item {
-  font-size: 12px;
-  color: var(--color-danger);
-  padding: 2px 0;
-}
-
-.import-tips {
-  padding-left: 20px;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  line-height: 1.8;
-}
-
-.empty-import {
-  display: flex;
   justify-content: center;
-  padding: 20px 0;
+  padding: 64px 0;
+  color: #909399;
+}
+
+.result-summary {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.import-instructions {
+  font-size: 14px;
+  color: #909399;
+  line-height: 1.8;
+  padding-left: 20px;
+}
+
+.import-instructions code {
+  background: #1e2330;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #409eff;
+  font-size: 12px;
 }
 </style>
