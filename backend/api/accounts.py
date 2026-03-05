@@ -9,10 +9,11 @@ from typing import Any, Dict, List, Optional
 
 import rarfile
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from config import settings as app_settings
 from database.connection import get_db
 from models.account import Account
 from utils.phone_parser import get_country_from_phone, parse_2fa_from_json
@@ -48,36 +49,14 @@ def _log_plain(msg: str) -> None:
     print(f"{_get_ts()} {msg}", flush=True)
 
 
-# SQLite 文件魔术头（十六进制表示），用于识别以十六进制存储的 .session 文件
-_SQLITE_MAGIC_HEX = '53514c697465'  # hex("SQLite")
-
-
-def _make_telethon_client(session_string: str, api_id: int, api_hash: str, **kwargs):
+def _get_api_credentials(account) -> tuple:
     """
-    根据 session_string 的实际格式创建 TelegramClient。
-
-    支持两种格式：
-    1. Telethon StringSession（手动导入的字符串 session）
-    2. 以十六进制存储的 SQLite .session 文件（通过文件批量导入）
-
-    返回 (client, tmp_dir)。若 tmp_dir 不为 None，调用方必须在完成后删除该目录。
+    返回账号的 (api_id, api_hash)。
+    优先使用账号自身存储的值，否则回退到全局 config（从环境变量 / .env 文件读取，内置默认值已在 config.py 配置）。
     """
-    from telethon import TelegramClient
-
-    if session_string.lower().startswith(_SQLITE_MAGIC_HEX):
-        # hex 编码的 SQLite session 文件 → 还原为文件，以文件 session 方式加载
-        tmp_dir = tempfile.mkdtemp(prefix='pmx_session_')
-        session_path = os.path.join(tmp_dir, 'account')
-        session_bytes = bytes.fromhex(session_string)
-        with open(session_path + '.session', 'wb') as _f:
-            _f.write(session_bytes)
-        client = TelegramClient(session_path, api_id, api_hash, **kwargs)
-        return client, tmp_dir
-    else:
-        # 标准 Telethon StringSession 格式
-        from telethon.sessions import StringSession
-        client = TelegramClient(StringSession(session_string), api_id, api_hash, **kwargs)
-        return client, None
+    api_id = account.api_id or app_settings.telegram_api_id
+    api_hash = account.api_hash or app_settings.telegram_api_hash
+    return api_id, api_hash
 
 router = APIRouter(prefix="/api/accounts", tags=["账号管理"])
 
@@ -110,7 +89,26 @@ class ImportSessionRequest(BaseModel):
     session_string: str
     phone: Optional[str] = ""
     api_id: Optional[int] = None
-    api_hash: Optional[str] = ""
+    api_hash: Optional[str] = None
+
+    @field_validator('api_id', mode='before')
+    @classmethod
+    def _coerce_api_id(cls, v):
+        """空字符串视为 None，避免前端留空时产生 422 错误。"""
+        if v == '' or v is None:
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return None
+
+    @field_validator('api_hash', mode='before')
+    @classmethod
+    def _coerce_api_hash(cls, v):
+        """空字符串视为 None。"""
+        if v == '':
+            return None
+        return v
 
 
 class BulkActionRequest(BaseModel):
@@ -396,20 +394,17 @@ async def check_spam_status_single(account_id: int, db: Session = Depends(get_db
                 "status": "disconnected", "message": "账号无 session，跳过检查"}
 
     try:
-        from telethon.errors import (
-            AuthKeyUnregisteredError,
-            FloodWaitError,
-            PhoneNumberBannedError,
-        )
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
 
-        api_id = account.api_id or int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
-        api_hash = account.api_hash or os.environ.get("TELEGRAM_API_HASH", "")
+        api_id, api_hash = _get_api_credentials(account)
 
         if not api_id or not api_hash:
             return {"success": False, "account_id": account_id, "phone": account.phone,
-                    "status": "disconnected", "message": "账号缺少 API ID / API Hash，请在账号或系统设置中配置"}
+                    "status": "disconnected",
+                    "message": "账号缺少 API ID / API Hash，请在账号或系统设置中配置（或设置环境变量 TELEGRAM_API_ID / TELEGRAM_API_HASH）"}
 
-        client, tmp_dir = _make_telethon_client(account.session_string, api_id, api_hash)
+        client = TelegramClient(StringSession(account.session_string), api_id, api_hash)
         try:
             await client.connect()
 
@@ -448,9 +443,6 @@ async def check_spam_status_single(account_id: int, db: Session = Depends(get_db
         finally:
             if client.is_connected():
                 await client.disconnect()
-            if tmp_dir:
-                import shutil
-                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     except Exception as e:
         return {"success": False, "account_id": account_id, "phone": account.phone,
@@ -495,8 +487,7 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             "error": "无法检查：缺少有效的 session",
         }
 
-    api_id = account.api_id or int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
-    api_hash = account.api_hash or os.environ.get("TELEGRAM_API_HASH", "")
+    api_id, api_hash = _get_api_credentials(account)
 
     if not api_id or not api_hash:
         return {
@@ -506,24 +497,25 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
             "status_text": "❓ 未知/错误",
             "raw_reply": "缺少 API ID / API Hash",
             "checked_at": datetime.utcnow().isoformat(),
-            "error": "账号缺少 API ID / API Hash，请在账号或系统设置中配置",
+            "error": "账号缺少 API ID / API Hash，请在账号或系统设置中配置（或设置环境变量 TELEGRAM_API_ID / TELEGRAM_API_HASH）",
         }
 
     phone = account.phone
     client = None
-    _tmp_dir = None  # temp dir for file-based SQLite sessions
 
     try:
+        from telethon import TelegramClient
         from telethon.errors import (
             AuthKeyUnregisteredError,
             FloodWaitError,
             PhoneNumberBannedError,
         )
+        from telethon.sessions import StringSession
 
-        # 步骤 1: 创建 client（自动识别 StringSession 或 SQLite hex 文件格式）
+        # 步骤 1: 创建 client
         _log_plain(f"{phone} → 正在创建 client")
-        client, _tmp_dir = _make_telethon_client(
-            account.session_string,
+        client = TelegramClient(
+            StringSession(account.session_string),
             api_id,
             api_hash,
             connection_retries=3,
@@ -708,13 +700,6 @@ async def check_restriction_status(account_id: int, db: Session = Depends(get_db
         if client and client.is_connected():
             await client.disconnect()
             _log_plain(f"{phone} → 已断开连接")
-        # 清理临时目录（仅 SQLite file-session 使用）
-        if _tmp_dir:
-            import shutil
-            try:
-                shutil.rmtree(_tmp_dir, ignore_errors=True)
-            except Exception:
-                pass
 
 
 @router.post("/bulk/set-2fa")
