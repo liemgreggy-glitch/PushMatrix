@@ -13,6 +13,7 @@ from api import (
     stats,
     settings,
 )
+from database.connection import init_db
 
 app = FastAPI(
     title="PushMatrix API",
@@ -27,6 +28,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    init_db()
 
 app.include_router(accounts.router)
 app.include_router(proxies.router)

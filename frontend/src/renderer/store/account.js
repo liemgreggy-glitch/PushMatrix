@@ -13,8 +13,9 @@ export const useAccountStore = defineStore('account', () => {
     loading.value = true
     try {
       const data = await accountsApi.getList(params)
-      accounts.value = data
-      total.value = data.length
+      const items = data.items || data.accounts || (Array.isArray(data) ? data : [])
+      accounts.value = items
+      total.value = data.total ?? items.length
     } catch (err) {
       console.error('Failed to fetch accounts:', err)
     } finally {
