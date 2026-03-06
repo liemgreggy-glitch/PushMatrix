@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import os
@@ -465,6 +466,93 @@ async def check_spam_status_single(account_id: int, db: Session = Depends(get_db
     except Exception as e:
         return {"success": False, "account_id": account_id, "phone": account.phone,
                 "status": "disconnected", "message": str(e)}
+
+
+@router.post("/check-restriction-local")
+async def check_restriction_local(data: dict):
+    """
+    Check restriction status using a raw base64-encoded .session file.
+    Used by the Electron client for accounts that have no database record.
+    Accepts: { phone, session_base64, api_id, api_hash }
+    Returns: { restriction_status, phone, raw_reply?, error? }
+    """
+    _SPAMBOT_WAIT_SECS = 3
+
+    phone = data.get("phone", "unknown")
+    session_base64 = data.get("session_base64", "")
+    api_id = data.get("api_id") or app_settings.telegram_api_id
+    api_hash = data.get("api_hash") or app_settings.telegram_api_hash
+
+    if not session_base64:
+        return {"restriction_status": "UNKNOWN", "phone": phone, "error": "未提供 session 数据"}
+    if not api_id or not api_hash:
+        return {"restriction_status": "UNKNOWN", "phone": phone, "error": "缺少 API ID / API Hash，请在设置中配置全局 API 凭证"}
+
+    temp_dir = tempfile.mkdtemp(prefix='telegram_check_')
+    try:
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession, SQLiteSession
+
+        safe_phone = os.path.basename(str(phone))
+        temp_session_path = os.path.join(temp_dir, safe_phone)
+        session_bytes = base64.b64decode(session_base64)
+        with open(temp_session_path + ".session", "wb") as f:
+            f.write(session_bytes)
+
+        sqlite_session = SQLiteSession(temp_session_path)
+        sqlite_session.save()
+        string_session = StringSession.save(sqlite_session)
+
+        if not string_session:
+            return {"restriction_status": "UNKNOWN", "phone": phone, "error": "session 格式转换失败"}
+
+        client = TelegramClient(StringSession(string_session), int(api_id), api_hash)
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                return {"restriction_status": "UNAUTHORIZED", "phone": phone, "error": "账号未授权"}
+
+            await client.send_message("@SpamBot", "/start")
+            await asyncio.sleep(_SPAMBOT_WAIT_SECS)
+
+            messages = await client.get_messages("@SpamBot", limit=5)
+            raw_reply = ""
+            for msg in messages:
+                if not msg.out and msg.text:
+                    raw_reply = msg.text
+                    break
+
+            raw_reply_lower = raw_reply.lower()
+
+            _UNRESTRICTED_KW = (
+                "good news", "no limits", "no complaints", "not limited",
+                "seems fine", "you're free", "no restrictions",
+                "хороших новостей", "без ограничений", "нет ограничений",
+            )
+            _FROZEN_KW = ("frozen", "suspended", "temporarily unavailable", "заморожен", "приостановлен")
+            _BANNED_KW = ("banned", "deleted", "deactivated", "заблокирован", "удалён", "деактивирован")
+            _SPAM_KW = ("spam", "limited", "restricted", "unfortunately", "спам", "ограничен", "к сожалению")
+
+            if any(k in raw_reply_lower for k in _UNRESTRICTED_KW):
+                restriction_status = "UNRESTRICTED"
+            elif any(k in raw_reply_lower for k in _FROZEN_KW):
+                restriction_status = "FROZEN"
+            elif any(k in raw_reply_lower for k in _BANNED_KW):
+                restriction_status = "BANNED"
+            elif any(k in raw_reply_lower for k in _SPAM_KW):
+                restriction_status = "SPAM"
+            else:
+                restriction_status = "UNKNOWN"
+
+            return {"restriction_status": restriction_status, "phone": phone, "raw_reply": raw_reply[:500]}
+        finally:
+            if client.is_connected():
+                await client.disconnect()
+    except Exception as e:
+        logger.warning("check-restriction-local failed (%s): %s", phone, e)
+        return {"restriction_status": "UNKNOWN", "phone": phone, "error": str(e)}
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @router.post("/{account_id}/check-restriction")
